@@ -45,4 +45,8 @@ export declare function isValidStatus(status: string): boolean;
 export declare function getJwtSecret(): string;
 /** Get session timeout in minutes */
 export declare function getSessionTimeout(): number;
+/** Valid status transitions for evidence lifecycle */
+export declare const VALID_STATUS_TRANSITIONS: Record<string, string[]>;
+/** Check if a status transition is valid */
+export declare function isValidStatusTransition(fromStatus: string, toStatus: string): boolean;
 //# sourceMappingURL=config.d.ts.map

@@ -202,41 +202,87 @@ Phase 6 ▸ Full Rollout (Months 13-15)
 
 ### Prerequisites
 
-- **Node.js** 18 LTS or later
-- **Docker** & **Docker Compose**
-- **Hyperledger Fabric** 2.5+ binaries
-- **Go** 1.20+ (for chaincode development)
-- **PostgreSQL** 15+
-- **Redis** 7+
-- **IPFS** (Kubo)
+- **Node.js** 18+ (or 20+ recommended)
+- **npm** (comes with Node.js)
 
-### Installation
+---
+
+### 📦 Installation
+
+Install dependencies for both the root (backend) and client (frontend):
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/crime-evidence-system.git
-cd crime-evidence-system
-
-# Install dependencies
+# 1. Install backend dependencies (in root directory)
 npm install
 
-# Set up environment variables
-cp .env.example .env
+# 2. Generate Prisma Client
+npx prisma generate
 
-# Start the blockchain network
-./scripts/start-network.sh
-
-# Start IPFS daemon
-ipfs daemon &
-
-# Run database migrations
-npm run db:migrate
-
-# Start the development server
-npm run dev
+# 3. Install frontend dependencies (in client directory)
+cd client
+npm install
+cd ..
 ```
 
-> ⚠️ **Note:** Detailed setup instructions will be added as the project progresses through development phases.
+---
+
+### ▶️ Running the Application
+
+The system requires two services running concurrently in separate terminal tabs:
+
+#### 1. Backend Server (Express REST API)
+* **Directory**: Root directory (`Crime_evidence`)
+* **Command**:
+  ```bash
+  npm run dev:api
+  ```
+* **URL**: [http://localhost:3001](http://localhost:3001)
+* **Health Check**: [http://localhost:3001/api/health](http://localhost:3001/api/health)
+
+#### 2. Frontend Server (Next.js Web Client)
+* **Directory**: `client` directory (`Crime_evidence/client`)
+* **Command**:
+  ```bash
+  cd client
+  npm run dev
+  ```
+* **URL**: [http://localhost:3000](http://localhost:3000)
+
+---
+
+### 🛑 How to Stop / Close the Servers
+
+#### Method 1: Keyboard Shortcut (Standard)
+In each terminal window running a server:
+* Press **`Ctrl + C`**
+* Type **`Y`** and press **`Enter`** if prompted `Terminate batch job (Y/N)?`.
+
+#### Method 2: Terminate via PowerShell (If running in background)
+If a process is still holding onto ports `3000` or `3001`:
+
+```powershell
+# Check active processes on ports 3000 and 3001
+Get-NetTCPConnection -LocalPort 3000, 3001 -ErrorAction SilentlyContinue | Select-Object LocalPort, State, OwningProcess
+
+# Terminate a specific process by PID
+Stop-Process -Id <PID> -Force
+
+# Or terminate all Node.js processes
+Stop-Process -Name node -Force
+```
+
+---
+
+### 🔑 Demo Accounts
+
+Use these pre-configured credentials to test different role permissions on the platform:
+
+| Role | Username | Password | Permissions / Use Case |
+| :--- | :--- | :--- | :--- |
+| **Head Officer** | `head_officer` | `Demo123!` | Full Admin — Create cases, boxes, manage users |
+| **Investigator** | `officer_dave` | `Demo123!` | Officer — Evidence collection, custody transfer |
+| **Lawyer (Defense)** | `lawyer_sarah` | `Demo123!` | Read-Only — View evidence and chain of custody |
+| **Judge (Court)** | `judge_dredd` | `Demo123!` | Court — Audit and verify chain of custody |
 
 ---
 

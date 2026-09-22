@@ -7,7 +7,32 @@ const router = Router();
 // GET /api/v1/cases
 router.get("/", authenticate, async (req, res) => {
     try {
+        const user = req.user;
+        const canViewAll = ["admin", "auditor"].includes(user.role);
+        let where = {};
+        if (!canViewAll) {
+            // Non-admin users only see cases they created OR cases linked to
+            // evidence they collected or currently hold custody of.
+            const linkedCaseIds = await prisma.evidence.findMany({
+                where: {
+                    OR: [
+                        { collectedById: user.id },
+                        { currentCustodianId: user.id },
+                    ],
+                },
+                select: { caseId: true },
+                distinct: ["caseId"],
+            });
+            const caseIds = linkedCaseIds.map((e) => e.caseId);
+            where = {
+                OR: [
+                    { createdById: user.id },
+                    ...(caseIds.length > 0 ? [{ id: { in: caseIds } }] : []),
+                ],
+            };
+        }
         const cases = await prisma.case.findMany({
+            where,
             include: {
                 createdBy: { select: { id: true, username: true, fullName: true } },
                 crimeBoxes: { select: { id: true, name: true, caseRefId: true, createdAt: true } },
@@ -62,7 +87,7 @@ router.get("/:id", authenticate, async (req, res) => {
     }
 });
 // PUT /api/v1/cases/:id
-router.put("/:id", authenticate, requirePermission("register_evidence"), async (req, res) => {
+router.put("/:id", authenticate, requirePermission("manage_cases"), async (req, res) => {
     try {
         const { title, description, status } = req.body;
         const updated = await prisma.case.update({

@@ -7,7 +7,7 @@
  */
 import { Router } from "express";
 import { authenticate, requirePermission, prisma } from "../middleware/auth.js";
-import { getValidStatuses, isValidStatus } from "../utils/config.js";
+import { getValidStatuses, isValidStatus, isValidStatusTransition, VALID_STATUS_TRANSITIONS } from "../utils/config.js";
 import { computeSHA256String, verifyHash } from "../utils/hash.js";
 import multer from "multer";
 import fs from "fs";
@@ -329,6 +329,15 @@ router.put("/:id", authenticate, requirePermission("register_evidence"), async (
             res.status(400).json({
                 error: `Invalid status "${status}"`,
                 valid_statuses: getValidStatuses(),
+            });
+            return;
+        }
+        // Validate status transition if status is being changed
+        if (status && status !== evidence.status && !isValidStatusTransition(evidence.status, status)) {
+            res.status(400).json({
+                error: `Invalid status transition from "${evidence.status}" to "${status}"`,
+                current_status: evidence.status,
+                valid_transitions: VALID_STATUS_TRANSITIONS[evidence.status] || [],
             });
             return;
         }

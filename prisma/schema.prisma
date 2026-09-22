@@ -3,8 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider = "sqlite"
 }
 
 model User {
@@ -33,6 +32,8 @@ model User {
   labResults        LabResult[]
   notifications      Notification[]
   activityLogs      ActivityLog[]
+  destructionRequests DestructionRequest[] @relation("DestructionRequester")
+  reviewedDestructions DestructionRequest[] @relation("DestructionReviewer")
 }
 
 model Case {
@@ -45,6 +46,7 @@ model Case {
   createdById String
   createdBy   User       @relation("CaseCreator", fields: [createdById], references: [id])
   crimeBoxes  CrimeBox[]
+  evidence    Evidence[]
 }
 
 model CrimeBox {
@@ -88,6 +90,8 @@ model Evidence {
   comments           EvidenceComment[]
   accessRequests     EvidenceAccessRequest[]
   labResults         LabResult[]
+  destructionRequests DestructionRequest[]
+  caseRef            Case?                   @relation(fields: [caseId], references: [id])
 }
 
 model CustodyEvent {
@@ -191,4 +195,25 @@ model ActivityLog {
   entityLabel String?
   createdAt   DateTime @default(now())
   actor       User     @relation(fields: [actorId], references: [id])
+}
+
+model DestructionRequest {
+  id            String    @id @default(uuid())
+  evidenceId    String
+  requesterId   String
+  reason        String
+  status        String    @default("pending")
+  reviewNotes   String?
+  reviewedAt    DateTime?
+  reviewerId    String?
+  certificate   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  evidence      Evidence  @relation(fields: [evidenceId], references: [id])
+  requester     User      @relation("DestructionRequester", fields: [requesterId], references: [id])
+  reviewer      User?     @relation("DestructionReviewer", fields: [reviewerId], references: [id])
+
+  @@index([evidenceId])
+  @@index([requesterId])
+  @@index([status])
 }

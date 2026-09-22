@@ -60,4 +60,19 @@ export function getJwtSecret() {
 export function getSessionTimeout() {
     return getSecurityConfig().session_timeout_min ?? 30;
 }
+/** Valid status transitions for evidence lifecycle */
+export const VALID_STATUS_TRANSITIONS = {
+    "Collected": ["Analyzed", "Archived", "Destroyed"],
+    "Analyzed": ["Presented", "Archived", "Destroyed"],
+    "Presented": ["Archived", "Destroyed"],
+    "Archived": ["Collected", "Destroyed"], // Can restore from archive
+    "Destroyed": [], // Terminal state
+};
+/** Check if a status transition is valid */
+export function isValidStatusTransition(fromStatus, toStatus) {
+    const allowed = VALID_STATUS_TRANSITIONS[fromStatus];
+    if (!allowed)
+        return false;
+    return allowed.includes(toStatus);
+}
 //# sourceMappingURL=config.js.map

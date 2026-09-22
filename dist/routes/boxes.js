@@ -73,9 +73,9 @@ router.post("/join", authenticate, async (req, res) => {
         // Role-based Key Validation
         let permission = "read-only";
         if (isPrivate) {
-            if (userRole !== "officer" && userRole !== "head_officer") {
+            if (userRole !== "officer" && userRole !== "head_officer" && userRole !== "admin") {
                 res.status(403).json({
-                    error: "Access Denied. Only Officers can use Private Keys.",
+                    error: "Access Denied. Only Officers and Admins can use Private Keys.",
                 });
                 return;
             }
