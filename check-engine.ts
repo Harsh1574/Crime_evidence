@@ -1,13 +1,14 @@
-import Database from 'better-sqlite3';
+import "dotenv/config";
+import { prisma } from "./src/lib/prisma.js";
 
 try {
-    console.log("Checking native SQLite driver...");
-    const db = new Database(':memory:'); // Use message memory for speed and less I/O
-    db.prepare('CREATE TABLE IF NOT EXISTS test (id INTEGER)').run();
-    console.log("✅ Native SQLite Driver: Working");
+    console.log("Checking PostgreSQL connection...");
+    const [row] = await prisma.$queryRaw<{ version: string }[]>`SELECT version()`;
+    console.log(`✅ PostgreSQL: Working (${row.version.split(",")[0]})`);
+    await prisma.$disconnect();
     process.exit(0);
 } catch (e: any) {
-    console.error("❌ Native SQLite Driver: FAILED. Check C++ build tools.");
+    console.error("❌ PostgreSQL: FAILED. Check DATABASE_URL and that the server is running.");
     console.error(e.message);
     process.exit(1);
 }

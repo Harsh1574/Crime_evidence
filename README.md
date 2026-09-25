@@ -204,6 +204,8 @@ Phase 6 ▸ Full Rollout (Months 13-15)
 
 - **Node.js** 18+ (or 20+ recommended)
 - **npm** (comes with Node.js)
+- **PostgreSQL** 14+ (the backend database)
+- Optional: a Hyperledger Fabric test network and an IPFS (Kubo) daemon — without them the backend runs in **mock mode** (see [Backend guide](./docs/BACKEND.md))
 
 ---
 
@@ -212,13 +214,20 @@ Phase 6 ▸ Full Rollout (Months 13-15)
 Install dependencies for both the root (backend) and client (frontend):
 
 ```bash
-# 1. Install backend dependencies (in root directory)
+# 1. Create the PostgreSQL database
+createdb crime_evidence          # or: psql -c "CREATE DATABASE crime_evidence;"
+
+# 2. Point the backend at it — edit .env (see .env.example)
+#    DATABASE_URL="postgresql://postgres:postgres@localhost:5432/crime_evidence?schema=public"
+
+# 3. Install backend dependencies (in root directory) — also generates the Prisma Client
 npm install
 
-# 2. Generate Prisma Client
-npx prisma generate
+# 4. Create the tables and the demo users
+npm run db:migrate
+npm run db:seed
 
-# 3. Install frontend dependencies (in client directory)
+# 5. Install frontend dependencies (in client directory)
 cd client
 npm install
 cd ..
@@ -238,6 +247,7 @@ The system requires two services running concurrently in separate terminal tabs:
   ```
 * **URL**: [http://localhost:3001](http://localhost:3001)
 * **Health Check**: [http://localhost:3001/api/health](http://localhost:3001/api/health)
+* **API reference**: [docs/BACKEND.md](./docs/BACKEND.md) · Postman: [`postman_collection.json`](./postman_collection.json)
 
 #### 2. Frontend Server (Next.js Web Client)
 * **Directory**: `client` directory (`Crime_evidence/client`)
@@ -275,7 +285,20 @@ Stop-Process -Name node -Force
 
 ### 🔑 Demo Accounts
 
-Use these pre-configured credentials to test different role permissions on the platform:
+`npm run db:seed` creates one account per role used in the setup walkthrough:
+
+| Role | Username | Password | Use Case |
+| :--- | :--- | :--- | :--- |
+| **Admin** | `admin` | `admin123` | Audit log, delete evidence, manage everything |
+| **Prosecutor** | `prosecutor` | `prosecutor123` | Create/edit cases, assign case officers, request disposal |
+| **Collector** | `collector` | `collector123` | Register evidence, transfer / accept custody |
+| **Forensic Analyst** | `analyst` | `analyst123` | Accept custody, analyse, transfer back |
+| **Judge** | `judge` | `judge123` | Approve / reject disposal requests (only role that can) |
+| **Auditor** | `auditor` | `auditor123` | Read-only everywhere + audit log |
+
+With the backend running, `npm run test:acceptance` walks through the whole setup checklist against it.
+
+The older demo data script (`npx tsx seed_demo.ts`) creates these additional accounts:
 
 | Role | Username | Password | Permissions / Use Case |
 | :--- | :--- | :--- | :--- |

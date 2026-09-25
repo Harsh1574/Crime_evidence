@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { authenticate, prisma } from "../middleware/auth.js";
+import { canViewAllEvidence, evidenceVisibilityWhere } from "../services/evidence.js";
 
 const router = Router();
 
@@ -7,22 +8,25 @@ const router = Router();
 router.get("/", authenticate, async (req: Request, res: Response) => {
     try {
         const userId = req.user!.id;
-        const isAdmin = req.user!.role === "admin";
+        const viewAll = canViewAllEvidence(req.user!.role);
 
-        // Filter condition for non-admins
-        const evidenceFilter = isAdmin ? {} : {
+        // Same visibility rules as the evidence list
+        const evidenceFilter = (await evidenceVisibilityWhere(req.user!)) ?? {};
+        const caseFilter = viewAll ? {} : {
             OR: [
-                { collectedById: userId },
-                { currentCustodianId: userId }
-            ]
+                { createdById: userId },
+                { officers: { some: { userId } } },
+                { evidence: { some: { OR: [{ collectedById: userId }, { currentCustodianId: userId }] } } },
+            ],
         };
 
         // Basic counts
-        const [totalEvidence, pendingTransfers, totalCases, totalLabs] = await Promise.all([
+        const [totalEvidence, pendingTransfers, totalCases, totalLabs, pendingDisposals] = await Promise.all([
             prisma.evidence.count({ where: evidenceFilter }),
             prisma.custodyEvent.count({ where: { toUserId: userId, status: "pending" } }),
-            prisma.case.count(), // Cases might be public readable or role based, keeping global for now or could filter
-            prisma.labResult.count({ where: isAdmin ? {} : { submittedById: userId } }),
+            prisma.case.count({ where: caseFilter }),
+            prisma.labResult.count({ where: viewAll ? {} : { submittedById: userId } }),
+            prisma.destructionRequest.count({ where: { status: "pending" } }),
         ]);
 
         // Evidence by status
@@ -79,6 +83,7 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
             totalCases,
             totalLabs,
             pendingAccessRequests,
+            pendingDisposals,
             unreadNotifications,
             evidenceByStatus: evidenceByStatus.map(e => ({ status: e.status, count: e._count.id })),
             evidenceByType: evidenceByType.map(e => ({ type: e.type, count: e._count.id })),

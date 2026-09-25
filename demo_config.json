@@ -121,7 +121,9 @@
         "request_access",
         "view_assigned_cases",
         "transfer_evidence",
-        "manage_cases"
+        "manage_cases",
+        "update_evidence_status",
+        "generate_reports"
       ]
     },
     {
@@ -131,7 +133,8 @@
         "accept_transfers",
         "manage_storage",
         "approve_access",
-        "transfer_evidence"
+        "transfer_evidence",
+        "generate_reports"
       ]
     },
     {
@@ -141,7 +144,9 @@
         "access_evidence_files",
         "create_analysis_reports",
         "version_evidence",
-        "transfer_evidence"
+        "transfer_evidence",
+        "update_evidence_status",
+        "generate_reports"
       ]
     },
     {
@@ -150,7 +155,11 @@
       "permissions": [
         "read_only_access",
         "generate_reports",
-        "export_data"
+        "export_data",
+        "create_cases",
+        "manage_cases",
+        "manage_case_officers",
+        "request_disposal"
       ]
     },
     {
@@ -161,7 +170,14 @@
         "system_configuration",
         "network_administration",
         "manage_cases",
-        "register_evidence"
+        "register_evidence",
+        "create_cases",
+        "manage_case_officers",
+        "view_all_evidence",
+        "view_audit_log",
+        "delete_evidence",
+        "generate_reports",
+        "update_evidence_status"
       ]
     },
     {
@@ -173,7 +189,11 @@
         "register_evidence",
         "transfer_evidence",
         "view_assigned_cases",
-        "manage_cases"
+        "manage_cases",
+        "manage_case_officers",
+        "update_evidence_status",
+        "generate_reports",
+        "request_disposal"
       ]
     },
     {
@@ -191,7 +211,10 @@
       "permissions": [
         "read_only_access",
         "view_evidence",
-        "issue_warrants"
+        "issue_warrants",
+        "approve_disposal",
+        "view_all_evidence",
+        "generate_reports"
       ]
     },
     {
@@ -199,16 +222,48 @@
       "display_name": "Auditor",
       "permissions": [
         "read_only_all_records",
-        "generate_compliance_reports"
+        "generate_compliance_reports",
+        "view_all_evidence",
+        "view_audit_log",
+        "generate_reports"
+      ],
+      "read_only": true
+    },
+    {
+      "name": "collector",
+      "display_name": "Evidence Collector",
+      "permissions": [
+        "register_evidence",
+        "transfer_evidence",
+        "accept_transfers",
+        "update_evidence_status",
+        "view_assigned_cases",
+        "generate_reports"
+      ]
+    },
+    {
+      "name": "forensic_analyst",
+      "display_name": "Forensic Analyst",
+      "permissions": [
+        "accept_transfers",
+        "transfer_evidence",
+        "access_evidence_files",
+        "create_analysis_reports",
+        "update_evidence_status",
+        "view_assigned_cases",
+        "generate_reports"
       ]
     }
   ],
   "evidence_lifecycle": {
     "statuses": [
       "Collected",
+      "Processing",
       "Analyzed",
       "Presented",
       "Archived",
+      "Released",
+      "Disposed",
       "Destroyed"
     ],
     "retention_days": 3650,

@@ -1,38 +1,69 @@
 /**
  * Authentication & Dynamic RBAC middleware.
  *
- * - authenticate: verifies JWT, attaches req.user
+ * - authenticate: verifies JWT (and that it was not revoked), attaches req.user
  * - requirePermission: looks up permissions from demo_config.json at runtime
+ * - requireAnyPermission: passes when the role has at least one of the permissions
  *
  * Permissions are NOT hardcoded — if you remove a permission from
  * a role in the config, it takes effect immediately.
  */
 import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma.js";
-import { findRole, getJwtSecret } from "../utils/config.js";
+import { findRole, getJwtSecret, isReadOnlyRole } from "../utils/config.js";
 // ---------------------------------------------------------------------------
 // authenticate — verify JWT token
+//
+// Also refuses tokens revoked by logout, users that were deactivated, and
+// write requests from read-only roles (e.g. auditor).
 // ---------------------------------------------------------------------------
-export function authenticate(req, res, next) {
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+export async function authenticate(req, res, next) {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
         res.status(401).json({ error: "Authentication required. Provide a Bearer token." });
         return;
     }
     const token = authHeader.split(" ")[1];
+    let decoded;
     try {
-        const secret = getJwtSecret();
-        const decoded = jwt.verify(token, secret);
-        req.user = {
-            id: decoded.userId,
-            username: decoded.username,
-            role: decoded.role,
-        };
-        next();
+        decoded = jwt.verify(token, getJwtSecret());
     }
     catch (err) {
         res.status(401).json({ error: "Invalid or expired token." });
         return;
+    }
+    if (!decoded.jti) {
+        res.status(401).json({ error: "Session format is outdated. Please log in again." });
+        return;
+    }
+    try {
+        const [revoked, user] = await Promise.all([
+            prisma.revokedToken.findUnique({ where: { jti: decoded.jti } }),
+            prisma.user.findUnique({ where: { id: decoded.userId }, select: { id: true, username: true, role: true, isActive: true } }),
+        ]);
+        if (revoked) {
+            res.status(401).json({ error: "Token has been revoked. Please log in again." });
+            return;
+        }
+        if (!user || !user.isActive) {
+            res.status(401).json({ error: "User account is inactive or no longer exists." });
+            return;
+        }
+        req.user = { id: user.id, username: user.username, role: user.role };
+        req.tokenInfo = { jti: decoded.jti, exp: decoded.exp };
+        const isLogout = req.originalUrl.split("?")[0].endsWith("/auth/logout");
+        if (WRITE_METHODS.has(req.method) && !isLogout && isReadOnlyRole(user.role)) {
+            res.status(403).json({
+                error: "Your role has read-only access. Write actions are not permitted.",
+                your_role: findRole(user.role)?.display_name ?? user.role,
+            });
+            return;
+        }
+        next();
+    }
+    catch (err) {
+        res.status(500).json({ error: "Authentication check failed", details: err.message });
     }
 }
 // ---------------------------------------------------------------------------
@@ -71,6 +102,27 @@ export function requirePermission(...requiredPermissions) {
                 missing: missingPermissions,
                 your_role: roleConfig.display_name,
                 your_permissions: rolePermissions,
+            });
+            return;
+        }
+        next();
+    };
+}
+// ---------------------------------------------------------------------------
+// requireAnyPermission — passes when the role has at least one permission
+// ---------------------------------------------------------------------------
+export function requireAnyPermission(...permissions) {
+    return (req, res, next) => {
+        if (!req.user) {
+            res.status(401).json({ error: "Authentication required." });
+            return;
+        }
+        const roleConfig = findRole(req.user.role);
+        if (!roleConfig || !permissions.some((p) => roleConfig.permissions.includes(p))) {
+            res.status(403).json({
+                error: "Insufficient permissions.",
+                required_any_of: permissions,
+                your_role: roleConfig?.display_name ?? req.user.role,
             });
             return;
         }

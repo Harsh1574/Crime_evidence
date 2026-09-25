@@ -3,10 +3,14 @@
  * Lab Results routes — forensic lab submissions.
  * Access Requests routes — request + approve/deny restricted evidence access.
  * Retention + RBAC per evidence item.
+ * Disposal requests, archive/restore, collection receipt.
  */
 import { Router } from "express";
-import { authenticate, requirePermission, prisma } from "../middleware/auth.js";
-import { getLifecycleConfig, getValidStatuses, isValidStatus } from "../utils/config.js";
+import { authenticate, prisma } from "../middleware/auth.js";
+import { sendError } from "../utils/http.js";
+import { recordEvidenceChange, TERMINAL_STATUSES } from "../services/evidence.js";
+import { DISPOSAL_INCLUDE, requestDisposal, reviewDisposal } from "../services/disposal.js";
+import { logActivity, notifyPermissionHolders, notifyUsers } from "../services/notifications.js";
 const router = Router({ mergeParams: true });
 // ---------------------------------------------------------------------------
 // COMMENTS
@@ -57,7 +61,7 @@ router.delete("/comments/:commentId", authenticate, async (req, res) => {
             res.status(404).json({ error: "Comment not found" });
             return;
         }
-        if (comment.userId !== req.user.id && !["Admin", "HeadOfficer"].includes(req.user.role)) {
+        if (comment.userId !== req.user.id && !["admin", "head_officer"].includes(req.user.role)) {
             res.status(403).json({ error: "Not authorised to delete this comment" });
             return;
         }
@@ -154,19 +158,15 @@ router.post("/requests", authenticate, async (req, res) => {
             data: { evidenceId: req.params.evidenceId, requesterId: req.user.id, reason: reason.trim() },
             include: { requester: { select: { id: true, username: true, fullName: true } } },
         });
-        // Notify supervisors
-        const supervisors = await prisma.user.findMany({ where: { role: { in: ["Admin", "HeadOfficer"] } } });
-        if (supervisors.length > 0) {
-            await prisma.notification.createMany({
-                data: supervisors.map((s) => ({
-                    userId: s.id,
-                    type: "access_request",
-                    title: "New Access Request",
-                    message: `${req.user.username} requested access to evidence`,
-                    link: `/dashboard/${s.id}/evidence/${req.params.evidenceId}`,
-                })),
-            });
-        }
+        // Notify supervisors (roles that can approve access, plus administrators)
+        const notice = {
+            type: "access_request",
+            title: "New Access Request",
+            message: `${req.user.username} requested access to evidence`,
+            evidenceId: req.params.evidenceId,
+        };
+        await notifyPermissionHolders("approve_access", notice, req.user.id);
+        await notifyPermissionHolders("user_management", notice, req.user.id);
         res.status(201).json(request);
     }
     catch (err) {
@@ -251,139 +251,50 @@ router.put("/rbac", authenticate, async (req, res) => {
     }
 });
 // ---------------------------------------------------------------------------
-// DISPOSAL / DESTRUCTION
+// DISPOSAL (a.k.a. destruction) — request by PROSECUTOR, decision by JUDGE
+// Both /destruction-requests and /disposal-requests paths are served.
 // ---------------------------------------------------------------------------
-// GET /api/v1/evidence/:evidenceId/destruction-requests
-router.get("/destruction-requests", authenticate, async (req, res) => {
+const DISPOSAL_PATHS = ["/destruction-requests", "/disposal-requests"];
+// GET /api/v1/evidence/:evidenceId/disposal-requests
+router.get(DISPOSAL_PATHS, authenticate, async (req, res) => {
     try {
         const requests = await prisma.destructionRequest.findMany({
             where: { evidenceId: req.params.evidenceId },
-            include: {
-                requester: { select: { id: true, username: true, fullName: true, role: true } },
-                reviewer: { select: { id: true, username: true, fullName: true } },
-            },
+            include: DISPOSAL_INCLUDE,
             orderBy: { createdAt: "desc" },
         });
         res.json(requests);
     }
     catch (err) {
-        res.status(500).json({ error: "Failed to fetch destruction requests", details: err.message });
+        res.status(500).json({ error: "Failed to fetch disposal requests", details: err.message });
     }
 });
-// POST /api/v1/evidence/:evidenceId/destruction-requests — request destruction
-router.post("/destruction-requests", authenticate, async (req, res) => {
+// POST /api/v1/evidence/:evidenceId/disposal-requests — request disposal
+router.post(DISPOSAL_PATHS, authenticate, async (req, res) => {
     try {
-        const { reason } = req.body;
-        if (!reason?.trim()) {
-            res.status(400).json({ error: "reason is required" });
-            return;
-        }
-        const evidence = await prisma.evidence.findUnique({
-            where: { id: req.params.evidenceId },
-        });
-        if (!evidence) {
-            res.status(404).json({ error: "Evidence not found" });
-            return;
-        }
-        // Check if evidence is already destroyed
-        if (evidence.status === "Destroyed") {
-            res.status(409).json({ error: "Evidence is already destroyed" });
-            return;
-        }
-        // Check for existing pending request
-        const existing = await prisma.destructionRequest.findFirst({
-            where: { evidenceId: req.params.evidenceId, status: "pending" },
-        });
-        if (existing) {
-            res.status(409).json({ error: "There is already a pending destruction request for this evidence" });
-            return;
-        }
-        const config = getLifecycleConfig();
-        const requiresApproval = config.destruction_requires_approval ?? true;
-        const request = await prisma.destructionRequest.create({
-            data: {
-                evidenceId: req.params.evidenceId,
-                requesterId: req.user.id,
-                reason: reason.trim(),
-                status: requiresApproval ? "pending" : "approved",
-            },
-            include: { requester: { select: { id: true, username: true, fullName: true } } },
-        });
-        // If no approval required, execute destruction immediately
-        if (!requiresApproval) {
-            await executeDestruction(req.params.evidenceId, req.user.id, request.id, reason.trim());
-        }
-        else {
-            // Notify supervisors/admins
-            const supervisors = await prisma.user.findMany({ where: { role: { in: ["Admin", "HeadOfficer"] } } });
-            if (supervisors.length > 0) {
-                await prisma.notification.createMany({
-                    data: supervisors.map((s) => ({
-                        userId: s.id,
-                        type: "destruction_request",
-                        title: "New Destruction Request",
-                        message: `${req.user.username} requested destruction of evidence`,
-                        link: `/dashboard/${s.id}/evidence/${req.params.evidenceId}`,
-                    })),
-                });
-            }
-        }
-        await prisma.activityLog.create({
-            data: {
-                actorId: req.user.id,
-                actorName: req.user.username,
-                action: "requested_destruction",
-                entityType: "Evidence",
-                entityId: req.params.evidenceId,
-                entityLabel: evidence.type,
-            },
-        });
+        const request = await requestDisposal(req.params.evidenceId, req.body.reason, req.user);
         res.status(201).json(request);
     }
     catch (err) {
-        res.status(500).json({ error: "Failed to create destruction request", details: err.message });
+        sendError(res, err, "Failed to create disposal request");
     }
 });
-// PUT /api/v1/evidence/:evidenceId/destruction-requests/:requestId — approve/deny destruction
-router.put("/destruction-requests/:requestId", authenticate, async (req, res) => {
+// PUT /api/v1/evidence/:evidenceId/disposal-requests/:requestId — approve/reject (JUDGE only)
+router.put(DISPOSAL_PATHS.map((p) => `${p}/:requestId`), authenticate, async (req, res) => {
     try {
-        const { status, reviewNotes } = req.body;
-        if (!["approved", "denied"].includes(status)) {
-            res.status(400).json({ error: "status must be approved or denied" });
+        const existing = await prisma.destructionRequest.findFirst({
+            where: { id: req.params.requestId, evidenceId: req.params.evidenceId },
+            select: { id: true },
+        });
+        if (!existing) {
+            res.status(404).json({ error: "Disposal request not found" });
             return;
         }
-        const request = await prisma.destructionRequest.findUnique({
-            where: { id: req.params.requestId },
-            include: { evidence: true },
-        });
-        if (!request) {
-            res.status(404).json({ error: "Destruction request not found" });
-            return;
-        }
-        if (request.status !== "pending") {
-            res.status(409).json({ error: "Request already processed" });
-            return;
-        }
-        const updated = await prisma.destructionRequest.update({
-            where: { id: req.params.requestId },
-            data: { status, reviewNotes: reviewNotes ?? null, reviewerId: req.user.id, reviewedAt: new Date() },
-        });
-        if (status === "approved") {
-            await executeDestruction(request.evidenceId, req.user.id, request.id, request.reason);
-        }
-        await prisma.notification.create({
-            data: {
-                userId: request.requesterId,
-                type: "destruction_request_reviewed",
-                title: `Destruction Request ${status === "approved" ? "Approved" : "Denied"}`,
-                message: `Your destruction request was ${status}`,
-                link: `/dashboard/${request.requesterId}/evidence/${req.params.evidenceId}`,
-            },
-        });
+        const updated = await reviewDisposal(existing.id, req.body.status, req.body.reviewNotes ?? req.body.note, req.user);
         res.json(updated);
     }
     catch (err) {
-        res.status(500).json({ error: "Failed to update destruction request", details: err.message });
+        sendError(res, err, "Failed to update disposal request");
     }
 });
 // POST /api/v1/evidence/:evidenceId/archive — archive evidence
@@ -400,32 +311,25 @@ router.post("/archive", authenticate, async (req, res) => {
             res.status(409).json({ error: "Evidence is already archived" });
             return;
         }
-        if (evidence.status === "Destroyed") {
-            res.status(409).json({ error: "Cannot archive destroyed evidence" });
+        if (TERMINAL_STATUSES.includes(evidence.status)) {
+            res.status(409).json({ error: `Cannot archive ${evidence.status.toLowerCase()} evidence` });
+            return;
+        }
+        if (evidence.locked) {
+            res.status(409).json({ error: "Evidence is locked due to a pending custody transfer." });
             return;
         }
         const updated = await prisma.evidence.update({
             where: { id: req.params.evidenceId },
             data: { status: "Archived" },
         });
-        await prisma.activityLog.create({
-            data: {
-                actorId: req.user.id,
-                actorName: req.user.username,
-                action: "archived_evidence",
-                entityType: "Evidence",
-                entityId: req.params.evidenceId,
-                entityLabel: evidence.type,
-            },
-        });
-        await prisma.notification.create({
-            data: {
-                userId: evidence.currentCustodianId,
-                type: "evidence_archived",
-                title: "Evidence Archived",
-                message: `Evidence ${evidence.type} has been archived`,
-                link: `/dashboard/${evidence.currentCustodianId}/evidence/${req.params.evidenceId}`,
-            },
+        await logActivity(req.user, "archived_evidence", "Evidence", evidence.id, evidence.type);
+        await recordEvidenceChange(evidence.id, { action: "STATUS_CHANGED:ARCHIVED", actor: req.user });
+        await notifyUsers([evidence.currentCustodianId], {
+            type: "evidence_archived",
+            title: "Evidence Archived",
+            message: `Evidence ${evidence.evidenceNumber ?? evidence.type} has been archived`,
+            evidenceId: evidence.id,
         });
         res.json({ success: true, evidence: updated });
     }
@@ -447,81 +351,19 @@ router.post("/restore", authenticate, async (req, res) => {
             res.status(409).json({ error: "Evidence is not archived" });
             return;
         }
-        // Restore to previous status or default to Collected
+        // Restore to Collected
         const updated = await prisma.evidence.update({
             where: { id: req.params.evidenceId },
             data: { status: "Collected" },
         });
-        await prisma.activityLog.create({
-            data: {
-                actorId: req.user.id,
-                actorName: req.user.username,
-                action: "restored_evidence",
-                entityType: "Evidence",
-                entityId: req.params.evidenceId,
-                entityLabel: evidence.type,
-            },
-        });
+        await logActivity(req.user, "restored_evidence", "Evidence", evidence.id, evidence.type);
+        await recordEvidenceChange(evidence.id, { action: "STATUS_CHANGED:COLLECTED", actor: req.user });
         res.json({ success: true, evidence: updated });
     }
     catch (err) {
         res.status(500).json({ error: "Failed to restore evidence", details: err.message });
     }
 });
-async function executeDestruction(evidenceId, reviewerId, requestId, reason) {
-    const config = getLifecycleConfig();
-    const generateCertificate = config.certificate_of_destruction ?? true;
-    let certificate = "";
-    if (generateCertificate) {
-        const evidence = await prisma.evidence.findUnique({
-            where: { id: evidenceId },
-            include: { collectedBy: { select: { fullName: true, badgeNumber: true, department: true } }, files: true },
-        });
-        if (evidence) {
-            certificate = generateDestructionCertificate(evidence, reviewerId, reason);
-        }
-    }
-    await prisma.$transaction([
-        prisma.evidence.update({
-            where: { id: evidenceId },
-            data: { status: "Destroyed" },
-        }),
-        prisma.destructionRequest.update({
-            where: { id: requestId },
-            data: { certificate: certificate || null },
-        }),
-    ]);
-    await prisma.activityLog.create({
-        data: {
-            actorId: reviewerId,
-            actorName: (await prisma.user.findUnique({ where: { id: reviewerId }, select: { username: true } }))?.username ?? "Unknown",
-            action: "destroyed_evidence",
-            entityType: "Evidence",
-            entityId: evidenceId,
-            entityLabel: "Destroyed",
-        },
-    });
-}
-function generateDestructionCertificate(evidence, reviewerId, reason) {
-    const now = new Date();
-    const reviewer = evidence.collectedBy; // fallback
-    return JSON.stringify({
-        certificateType: "Certificate of Destruction",
-        evidenceId: evidence.id,
-        evidenceType: evidence.type,
-        caseId: evidence.caseId,
-        description: evidence.description,
-        collectedBy: evidence.collectedBy?.fullName ?? "Unknown",
-        collectedByBadge: evidence.collectedBy?.badgeNumber ?? "N/A",
-        department: evidence.collectedBy?.department ?? "N/A",
-        destructionDate: now.toISOString(),
-        destructionReason: reason,
-        destroyedBy: reviewerId,
-        fileHashes: evidence.files?.map((f) => f.sha256Hash) ?? [],
-        witness: "System Automated",
-        certificateHash: `DEST-${evidence.id}-${now.getTime()}`,
-    }, null, 2);
-}
 // ---------------------------------------------------------------------------
 // RETENTION EXPIRY
 // ---------------------------------------------------------------------------
@@ -547,91 +389,11 @@ router.get("/retention-status", authenticate, async (req, res) => {
             status: evidence.status,
             isExpired,
             daysUntilExpiry,
-            actionRequired: isExpired && evidence.status !== "Destroyed" && evidence.status !== "Archived",
+            actionRequired: isExpired && !TERMINAL_STATUSES.includes(evidence.status) && evidence.status !== "Archived",
         });
     }
     catch (err) {
         res.status(500).json({ error: "Failed to check retention status", details: err.message });
-    }
-});
-// GET /api/v1/retention/expiring — list all evidence nearing/exceeding retention (admin only)
-router.get("/retention/expiring", authenticate, async (req, res) => {
-    try {
-        if (!["admin", "head_officer", "auditor"].includes(req.user.role)) {
-            res.status(403).json({ error: "Insufficient permissions" });
-            return;
-        }
-        const { days = "30" } = req.query;
-        const thresholdDays = parseInt(days, 10);
-        const now = new Date();
-        const thresholdDate = new Date(now.getTime() + thresholdDays * 24 * 60 * 60 * 1000);
-        const expiring = await prisma.evidence.findMany({
-            where: {
-                retentionDeadline: { not: null, lte: thresholdDate },
-                status: { notIn: ["Destroyed", "Archived"] },
-            },
-            include: {
-                collectedBy: { select: { id: true, username: true, fullName: true, role: true } },
-                currentCustodian: { select: { id: true, username: true, fullName: true, role: true } },
-            },
-            orderBy: { retentionDeadline: "asc" },
-        });
-        res.json({
-            count: expiring.length,
-            thresholdDays,
-            evidence: expiring.map((e) => ({
-                ...e,
-                daysUntilExpiry: e.retentionDeadline ? Math.ceil((new Date(e.retentionDeadline).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null,
-                isExpired: e.retentionDeadline ? new Date(e.retentionDeadline) < now : false,
-            })),
-        });
-    }
-    catch (err) {
-        res.status(500).json({ error: "Failed to fetch expiring evidence", details: err.message });
-    }
-});
-// POST /api/v1/retention/notify-expired — send notifications for expired retention (admin/cron)
-router.post("/retention/notify-expired", authenticate, async (req, res) => {
-    try {
-        if (!["admin", "head_officer"].includes(req.user.role)) {
-            res.status(403).json({ error: "Insufficient permissions" });
-            return;
-        }
-        const now = new Date();
-        const expired = await prisma.evidence.findMany({
-            where: {
-                retentionDeadline: { not: null, lt: now },
-                status: { notIn: ["Destroyed", "Archived"] },
-            },
-            select: { id: true, retentionDeadline: true, type: true, currentCustodianId: true, collectedById: true, caseId: true },
-        });
-        let notified = 0;
-        for (const ev of expired) {
-            const recipients = new Set();
-            if (ev.currentCustodianId)
-                recipients.add(ev.currentCustodianId);
-            if (ev.collectedById)
-                recipients.add(ev.collectedById);
-            // Also notify admins
-            const admins = await prisma.user.findMany({ where: { role: "admin" }, select: { id: true } });
-            admins.forEach((a) => recipients.add(a.id));
-            for (const userId of recipients) {
-                await prisma.notification.create({
-                    data: {
-                        userId,
-                        type: "retention_expiry",
-                        title: "Retention Period Expired",
-                        message: `Evidence ${ev.type} (Case: ${ev.caseId}) has exceeded its retention period. Action required.`,
-                        link: `/dashboard/${userId}/evidence/${ev.id}`,
-                    },
-                });
-                notified++;
-            }
-        }
-        res.json({ success: true, expiredCount: expired.length, notificationsSent: notified });
-    }
-    catch (err) {
-        res.status(500).json({ error: "Failed to send retention expiry notifications", details: err.message });
     }
 });
 // ---------------------------------------------------------------------------
@@ -669,7 +431,7 @@ router.get("/collection-receipt", authenticate, async (req, res) => {
                 description: evidence.description,
                 collectionDate: evidence.collectionDate,
                 location: evidence.location,
-                tags: evidence.tags ? JSON.parse(evidence.tags) : [],
+                tags: parseTags(evidence.tags),
                 status: evidence.status,
                 fileHash: evidence.fileHash,
                 ipfsCid: evidence.ipfsCid,
@@ -689,6 +451,9 @@ router.get("/collection-receipt", authenticate, async (req, res) => {
             })),
             verification: {
                 hashAlgorithm: "SHA-256",
+                metadataHash: evidence.metadataHash,
+                ledgerTxId: evidence.ledgerTxId,
+                anchorStatus: evidence.anchorStatus,
                 integrityVerified: evidence.fileHash ? "PENDING" : "NO_HASH",
             },
         };
@@ -698,74 +463,16 @@ router.get("/collection-receipt", authenticate, async (req, res) => {
         res.status(500).json({ error: "Failed to generate collection receipt", details: err.message });
     }
 });
-// POST /api/v1/evidence/batch — register multiple evidence items
-router.post("/batch", authenticate, requirePermission("register_evidence"), async (req, res) => {
+/** Tags are stored as a JSON array string, but older rows may hold plain text */
+function parseTags(tags) {
+    if (!tags)
+        return [];
     try {
-        const { items } = req.body;
-        if (!Array.isArray(items) || items.length === 0) {
-            res.status(400).json({ error: "items array is required" });
-            return;
-        }
-        if (items.length > 50) {
-            res.status(400).json({ error: "Maximum 50 items per batch" });
-            return;
-        }
-        const validStatuses = getValidStatuses();
-        const validTypes = ["Physical", "Digital", "Testimonial"];
-        const results = [];
-        for (const item of items) {
-            const { caseId, type, description, collectionDate, location, tags, status, officerNotes } = item;
-            // Validate required fields
-            if (!caseId || !type || !description || !collectionDate || !location) {
-                results.push({ success: false, item, error: "Missing required fields" });
-                continue;
-            }
-            if (!validTypes.includes(type)) {
-                results.push({ success: false, item, error: `Invalid type "${type}"` });
-                continue;
-            }
-            const evidenceStatus = status ?? validStatuses[0];
-            if (!isValidStatus(evidenceStatus)) {
-                results.push({ success: false, item, error: `Invalid status "${evidenceStatus}"` });
-                continue;
-            }
-            try {
-                const created = await prisma.evidence.create({
-                    data: {
-                        caseId: caseId.trim(),
-                        type,
-                        description,
-                        collectionDate: new Date(collectionDate),
-                        location,
-                        tags: tags ? JSON.stringify(tags) : null,
-                        status: evidenceStatus,
-                        officerNotes: officerNotes ?? null,
-                        collectedById: req.user.id,
-                        currentCustodianId: req.user.id,
-                    },
-                });
-                await prisma.activityLog.create({
-                    data: {
-                        actorId: req.user.id,
-                        actorName: req.user.username,
-                        action: "registered_evidence",
-                        entityType: "Evidence",
-                        entityId: created.id,
-                        entityLabel: created.type,
-                    },
-                });
-                results.push({ success: true, evidence: created });
-            }
-            catch (err) {
-                results.push({ success: false, item, error: err.message });
-            }
-        }
-        const successful = results.filter((r) => r.success).length;
-        res.status(successful > 0 ? 201 : 400).json({ results, successful, failed: results.length - successful });
+        return JSON.parse(tags);
     }
-    catch (err) {
-        res.status(500).json({ error: "Failed to process batch registration", details: err.message });
+    catch {
+        return tags.split(",").map((t) => t.trim()).filter(Boolean);
     }
-});
+}
 export default router;
 //# sourceMappingURL=evidence-extras.js.map

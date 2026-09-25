@@ -1,11 +1,14 @@
 /**
- * Authentication routes — register, login, profile.
+ * Authentication routes — register, login, logout, profile.
  */
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { randomUUID } from "node:crypto";
 import { authenticate, prisma } from "../middleware/auth.js";
-import { getValidRoleNames, getJwtSecret, getSessionTimeout, } from "../utils/config.js";
+import { getValidRoleNames, getJwtSecret, getSessionTimeout, normalizeRoleName, } from "../utils/config.js";
+import { audit } from "../services/audit.js";
+import { seedDemoUsers } from "../services/seed.js";
 const router = Router();
 // ---------------------------------------------------------------------------
 // POST /api/v1/auth/register — create a new user (Public for demo)
@@ -24,12 +27,12 @@ async (req, res) => {
             });
             return;
         }
-        // Validate role against config (zero-hardcoding)
-        const validRoles = getValidRoleNames();
-        if (!validRoles.includes(role)) {
+        // Validate role against config (zero-hardcoding, case-insensitive)
+        const canonicalRole = normalizeRoleName(role);
+        if (!canonicalRole) {
             res.status(400).json({
                 error: `Invalid role "${role}"`,
-                valid_roles: validRoles,
+                valid_roles: getValidRoleNames(),
             });
             return;
         }
@@ -50,7 +53,7 @@ async (req, res) => {
                 fullName,
                 badgeNumber: badgeNumber ?? null,
                 department: department ?? null,
-                role,
+                role: canonicalRole,
                 passwordHash,
             },
             select: {
@@ -81,18 +84,21 @@ router.post("/login", async (req, res) => {
         }
         const user = await prisma.user.findUnique({ where: { username } });
         if (!user || !user.isActive) {
+            await audit(req, { action: "LOGIN_FAILED", username, statusCode: 401, details: { reason: "unknown_or_inactive_user" } });
             res.status(401).json({ error: "Invalid credentials." });
             return;
         }
         const passwordValid = await bcrypt.compare(password, user.passwordHash);
         if (!passwordValid) {
+            await audit(req, { action: "LOGIN_FAILED", userId: user.id, username, role: user.role, statusCode: 401, details: { reason: "bad_password" } });
             res.status(401).json({ error: "Invalid credentials." });
             return;
         }
-        // Generate JWT with timeout from config
+        // Generate JWT with timeout from config. The jti lets logout revoke this exact token.
         const secret = getJwtSecret();
         const timeoutMin = getSessionTimeout();
-        const token = jwt.sign({ userId: user.id, username: user.username, role: user.role }, secret, { expiresIn: `${timeoutMin}m` });
+        const token = jwt.sign({ userId: user.id, username: user.username, role: user.role }, secret, { expiresIn: `${timeoutMin}m`, jwtid: randomUUID() });
+        await audit(req, { action: "LOGIN", userId: user.id, username: user.username, role: user.role, statusCode: 200 });
         res.json({
             success: true,
             token,
@@ -108,6 +114,27 @@ router.post("/login", async (req, res) => {
     }
     catch (err) {
         res.status(500).json({ error: "Login failed", details: err.message });
+    }
+});
+// ---------------------------------------------------------------------------
+// POST /api/v1/auth/logout — revoke the current token server-side
+// ---------------------------------------------------------------------------
+router.post("/logout", authenticate, async (req, res) => {
+    try {
+        const { jti, exp } = req.tokenInfo;
+        const expiresAt = exp ? new Date(exp * 1000) : new Date(Date.now() + getSessionTimeout() * 60 * 1000);
+        await prisma.revokedToken.upsert({
+            where: { jti },
+            create: { jti, userId: req.user.id, expiresAt },
+            update: {},
+        });
+        // Housekeeping: revoked tokens that have expired anyway are no longer needed
+        await prisma.revokedToken.deleteMany({ where: { expiresAt: { lt: new Date() } } });
+        await audit(req, { action: "LOGOUT", statusCode: 200 });
+        res.json({ success: true, message: "Logged out. This token can no longer be used." });
+    }
+    catch (err) {
+        res.status(500).json({ error: "Logout failed", details: err.message });
     }
 });
 // ---------------------------------------------------------------------------
@@ -141,7 +168,7 @@ router.get("/me", authenticate, async (req, res) => {
     }
 });
 // ---------------------------------------------------------------------------
-// POST /api/v1/auth/seed — create initial admin user (only if no users exist)
+// POST /api/v1/auth/seed — create the demo users (only if no users exist)
 // ---------------------------------------------------------------------------
 router.post("/seed", async (req, res) => {
     try {
@@ -150,28 +177,11 @@ router.post("/seed", async (req, res) => {
             res.status(400).json({ error: "Users already exist. Seed is only for initial setup." });
             return;
         }
-        const passwordHash = await bcrypt.hash("admin123", 12);
-        const admin = await prisma.user.create({
-            data: {
-                username: "admin",
-                email: "admin@crimeevidence.gov",
-                fullName: "System Administrator",
-                role: "admin",
-                department: "IT Administration",
-                passwordHash,
-            },
-            select: {
-                id: true,
-                username: true,
-                email: true,
-                fullName: true,
-                role: true,
-            },
-        });
+        const result = await seedDemoUsers();
         res.status(201).json({
             success: true,
-            message: "Initial admin user created. Login with username: admin, password: admin123",
-            user: admin,
+            message: "Demo users created. Login with any of the usernames/passwords below.",
+            users: result.created,
         });
     }
     catch (err) {

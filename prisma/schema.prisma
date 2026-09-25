@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 model User {
@@ -34,10 +34,14 @@ model User {
   activityLogs      ActivityLog[]
   destructionRequests DestructionRequest[] @relation("DestructionRequester")
   reviewedDestructions DestructionRequest[] @relation("DestructionReviewer")
+  caseAssignments   CaseOfficer[]          @relation("CaseOfficerUser")
+  caseAssignmentsMade CaseOfficer[]        @relation("CaseOfficerAddedBy")
+  evidenceVersions  EvidenceVersion[]
 }
 
 model Case {
   id          String     @id @default(uuid())
+  caseNumber  String?    @unique
   title       String
   description String?
   status      String     @default("open")
@@ -47,6 +51,22 @@ model Case {
   createdBy   User       @relation("CaseCreator", fields: [createdById], references: [id])
   crimeBoxes  CrimeBox[]
   evidence    Evidence[]
+  officers    CaseOfficer[]
+}
+
+// Officers assigned to a case (e.g. COLLECTOR, FORENSIC_ANALYST added by the PROSECUTOR)
+model CaseOfficer {
+  id          String   @id @default(uuid())
+  caseId      String
+  userId      String
+  addedById   String
+  createdAt   DateTime @default(now())
+  caseRef     Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user        User     @relation("CaseOfficerUser", fields: [userId], references: [id])
+  addedBy     User     @relation("CaseOfficerAddedBy", fields: [addedById], references: [id])
+
+  @@unique([caseId, userId])
+  @@index([userId])
 }
 
 model CrimeBox {
@@ -64,14 +84,29 @@ model CrimeBox {
 
 model Evidence {
   id                 String                  @id @default(uuid())
+  // Human-readable ID used as the Fabric asset ID (e.g. EVID_2026_001)
+  evidenceNumber     String?                 @unique
+  // Free-form case identifier (Case.id, Case.caseNumber or a Crime Box caseId)
   caseId             String
+  // Resolved link to a Case row, when caseId matches one
+  caseRefId          String?
   type               String
   description        String
   collectionDate     DateTime
   location           String
   tags               String?
+  officerName        String?
+  // SHA-256 of the primary evidence file
   fileHash           String?
+  // SHA-256 of the canonical metadata document stored on IPFS
+  metadataHash       String?
+  // CID of the latest metadata document on IPFS (the pointer stored on the ledger)
   ipfsCid            String?
+  // Latest ledger transaction ID for this evidence asset
+  ledgerTxId         String?
+  // PENDING | ANCHORED | FAILED
+  anchorStatus       String                  @default("PENDING")
+  version            Int                     @default(0)
   status             String
   locked             Boolean                 @default(false)
   officerNotes       String?
@@ -91,7 +126,12 @@ model Evidence {
   accessRequests     EvidenceAccessRequest[]
   labResults         LabResult[]
   destructionRequests DestructionRequest[]
-  caseRef            Case?                   @relation(fields: [caseId], references: [id])
+  versions           EvidenceVersion[]
+  caseRef            Case?                   @relation(fields: [caseRefId], references: [id], onDelete: SetNull)
+
+  @@index([caseId])
+  @@index([caseRefId])
+  @@index([status])
 }
 
 model CustodyEvent {
@@ -129,6 +169,8 @@ model EvidenceFile {
   mimeType   String
   sha256Hash String
   ipfsCid    String?
+  // Location of the stored copy on local disk (relative to the uploads directory)
+  storagePath String?
   uploadedAt DateTime @default(now())
   evidenceId String
   evidence   Evidence @relation(fields: [evidenceId], references: [id])
@@ -216,4 +258,80 @@ model DestructionRequest {
   @@index([evidenceId])
   @@index([requesterId])
   @@index([status])
+}
+
+// Immutable snapshot of an evidence item after each change (version history)
+model EvidenceVersion {
+  id            String   @id @default(uuid())
+  evidenceId    String
+  version       Int
+  action        String
+  changedById   String?
+  changedByName String
+  notes         String?
+  snapshot      Json
+  metadataHash  String
+  metadataCid   String?
+  ledgerTxId    String?
+  createdAt     DateTime @default(now())
+  evidence      Evidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  changedBy     User?    @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@unique([evidenceId, version])
+}
+
+// Local index of every ledger transaction. In mock mode this table is the ledger;
+// each row is hash-linked to the previous one so tampering is detectable.
+model LedgerTransaction {
+  id          String   @id @default(uuid())
+  txId        String   @unique
+  blockNumber Int      @unique
+  assetId     String
+  function    String
+  cid         String?
+  payloadHash String
+  prevHash    String
+  blockHash   String
+  mode        String
+  createdAt   DateTime @default(now())
+
+  @@index([assetId])
+}
+
+// Security audit trail — logins, logouts, every write request and every denial
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  username    String?
+  role        String?
+  action      String
+  method      String?
+  path        String?
+  statusCode  Int?
+  entityType  String?
+  entityId    String?
+  ipAddress   String?
+  userAgent   String?
+  details     Json?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// JWTs invalidated by logout
+model RevokedToken {
+  jti       String   @id
+  userId    String
+  expiresAt DateTime
+  revokedAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+// Named counters for human-readable IDs (EVID_2026_001, CASE_2026_001)
+model Counter {
+  name  String @id
+  value Int    @default(0)
 }

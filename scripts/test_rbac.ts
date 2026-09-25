@@ -14,7 +14,7 @@ const LOG_FILE = path.resolve(__dirname, 'rbac_log.txt');
 // Config
 const CONFIG_PATH = path.resolve(__dirname, '..', 'demo_config.json');
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-const SECRET = config.security?.jwt_secret || "crime-evidence-dev-secret-change-in-production";
+const SECRET = process.env.JWT_SECRET || config.security?.jwt_secret || "crime-evidence-dev-secret-change-in-production";
 const BASE_URL = 'http://localhost:3000/api/v1';
 
 function log(msg: string) {
@@ -63,7 +63,7 @@ async function testRole(role: string, shouldSucceed: boolean) {
         userId: `test-${role}`,
         username: `test-${role}`,
         role: role
-    }, SECRET, { expiresIn: '1h' });
+    }, SECRET, { expiresIn: '1h', jwtid: crypto.randomUUID() });
 
     let evidenceId: string | null = null;
 
@@ -115,7 +115,7 @@ async function testTransfer(evidenceId: string) {
         userId: `test-officer`,
         username: `test-officer`,
         role: `officer`
-    }, SECRET, { expiresIn: '1h' });
+    }, SECRET, { expiresIn: '1h', jwtid: crypto.randomUUID() });
 
     // Create a dummy recipient
     const recipientId = "test-recipient-uuid";

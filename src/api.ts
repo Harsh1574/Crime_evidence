@@ -17,6 +17,12 @@ import statRoutes from "./routes/stats.js";
 import caseRoutes from "./routes/cases.js";
 import evidenceExtrasRouter from "./routes/evidence-extras.js";
 import extrasRouter from "./routes/extras.js";
+import auditLogRoutes from "./routes/audit-log.js";
+import disposalRoutes from "./routes/disposals.js";
+import ledgerEvidenceRoutes from "./routes/ledger-evidence.js";
+import { auditTrail } from "./services/audit.js";
+import { getIpfsMode } from "./services/ipfs.js";
+import { getLedgerMode } from "./services/ledger.js";
 import { prisma } from "./lib/prisma.js";
 
 // ---------------------------------------------------------------------------
@@ -27,16 +33,26 @@ export function createApp(): express.Express {
     const app = express();
 
     // Middleware
-    app.use(cors());
-    app.use(express.json());
+    app.use(cors({ exposedHeaders: ["Content-Disposition", "X-File-SHA256", "X-File-Integrity"] }));
+    app.use(express.json({ limit: "25mb" }));
+    app.use(auditTrail);
 
     // -------------------------------------------------------------------------
     // GET /api/health — server health check
     // -------------------------------------------------------------------------
-    app.get("/api/health", (_req: Request, res: Response) => {
-        res.json({
-            status: "ok",
+    app.get("/api/health", async (_req: Request, res: Response) => {
+        let database = "ok";
+        try {
+            await prisma.$queryRaw`SELECT 1`;
+        } catch {
+            database = "unreachable";
+        }
+        res.status(database === "ok" ? 200 : 503).json({
+            status: database === "ok" ? "ok" : "degraded",
             server: "crime-evidence-mcp-server",
+            database,
+            ledgerMode: getLedgerMode(),
+            ipfsMode: getIpfsMode(),
             timestamp: new Date().toISOString(),
         });
     });
@@ -176,21 +192,41 @@ export function createApp(): express.Express {
     });
 
     // -------------------------------------------------------------------------
-    // Mount Phase 2 route modules
+    // Ledger-style evidence API (IPFS metadata + Fabric CID pointer).
+    // Paths it does not define (e.g. /api/evidence/:id/versions) fall through
+    // to the v1 routers mounted under /api below.
     // -------------------------------------------------------------------------
-    app.use("/api/v1/auth", authRoutes);
-    app.use("/api/v1/evidence", evidenceRoutes);
-    app.use("/api/v1/evidence/:evidenceId", evidenceExtrasRouter);
-    app.use("/api/v1/custody", custodyRoutes);
-    app.use("/api/v1/boxes", boxRoutes);
-    app.use("/api/v1/stats", statRoutes);
-    app.use("/api/v1/cases", caseRoutes);
-    app.use("/api/v1", extrasRouter);
+    app.use("/api/evidence", ledgerEvidenceRoutes);
+
+    // -------------------------------------------------------------------------
+    // Mount Phase 2 route modules — served under /api/v1 (used by the frontend)
+    // and under /api (e.g. GET /api/auth/me).
+    // -------------------------------------------------------------------------
+    for (const prefix of ["/api/v1", "/api"]) {
+        app.use(`${prefix}/auth`, authRoutes);
+        app.use(`${prefix}/evidence`, evidenceRoutes);
+        app.use(`${prefix}/evidence/:evidenceId`, evidenceExtrasRouter);
+        app.use(`${prefix}/custody`, custodyRoutes);
+        app.use(`${prefix}/boxes`, boxRoutes);
+        app.use(`${prefix}/stats`, statRoutes);
+        app.use(`${prefix}/cases`, caseRoutes);
+        app.use(`${prefix}/audit-log`, auditLogRoutes);
+        app.use(`${prefix}/disposals`, disposalRoutes);
+        app.use(prefix, extrasRouter);
+    }
 
     // -------------------------------------------------------------------------
     // Global error handler
     // -------------------------------------------------------------------------
     app.use((err: any, _req: Request, res: Response, _next: any) => {
+        if (err?.type === "entity.parse.failed") {
+            res.status(400).json({ error: "Malformed JSON body" });
+            return;
+        }
+        if (err?.code === "LIMIT_FILE_SIZE") {
+            res.status(413).json({ error: "File is larger than the configured storage.max_file_size_mb" });
+            return;
+        }
         console.error("Unhandled error:", err);
         res.status(500).json({ error: "Internal server error" });
     });
@@ -210,5 +246,6 @@ export function startApiServer(port: number = 3000): void {
         console.log(`  Config:  GET  http://localhost:${port}/api/config`);
         console.log(`  Update:  PUT  http://localhost:${port}/api/config`);
         console.log(`  Add:     POST http://localhost:${port}/api/config/sections`);
+        console.log(`  Ledger mode: ${getLedgerMode()}   IPFS mode: ${getIpfsMode()}`);
     });
 }

@@ -1,25 +1,28 @@
 /**
- * Evidence management routes — CRUD, search, integrity verification.
+ * Evidence management routes — CRUD, search, integrity verification,
+ * version history, reports and file download.
  *
  * Evidence statuses are ALWAYS validated against demo_config.json.
  * If a status is renamed in the config, the API immediately accepts
  * the new name and rejects the old one.
+ *
+ * Every change is anchored: metadata → IPFS → ledger (see services/evidence.ts).
  */
 import { Router } from "express";
 import { authenticate, requirePermission, prisma } from "../middleware/auth.js";
-import { getValidStatuses, isValidStatus, isValidStatusTransition, VALID_STATUS_TRANSITIONS } from "../utils/config.js";
-import { computeSHA256String, verifyHash } from "../utils/hash.js";
+import { getValidStatuses, readStorageLimitBytes } from "../utils/config.js";
+import { computeSHA256, verifyHash } from "../utils/hash.js";
+import { sendError } from "../utils/http.js";
+import { buildEvidenceSearchWhere, createEvidence, deleteEvidence, findEvidenceId, getEvidenceDetail, readEvidenceFile, recordEvidenceChange, removeUploadedFiles, storeUploadedFiles, updateEvidence, uploadsDir, verifyEvidence, } from "../services/evidence.js";
+import { generateEvidenceReport } from "../services/report.js";
+import { audit } from "../services/audit.js";
+import { logActivity } from "../services/notifications.js";
 import multer from "multer";
 import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
-// ESM fix for __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 // Configure Multer Storage
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        const uploadDir = path.join(process.cwd(), "uploads");
+        const uploadDir = uploadsDir();
         if (!fs.existsSync(uploadDir)) {
             fs.mkdirSync(uploadDir, { recursive: true });
         }
@@ -27,132 +30,108 @@ const storage = multer.diskStorage({
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-        cb(null, uniqueSuffix + "-" + file.originalname);
+        const safeName = file.originalname.replace(/[^A-Za-z0-9._-]/g, "_");
+        cb(null, uniqueSuffix + "-" + safeName);
     },
 });
-const upload = multer({ storage: storage });
+export const upload = multer({ storage, limits: { fileSize: readStorageLimitBytes() } });
 const router = Router();
+/** Resolve :id (UUID, evidence number or CID) or send 404 */
+async function resolveIdOr404(req, res) {
+    const id = await findEvidenceId(req.params.id);
+    if (!id)
+        res.status(404).json({ error: "Evidence not found." });
+    return id;
+}
 // ---------------------------------------------------------------------------
 // POST /api/v1/evidence — register new evidence (with optional files)
 // ---------------------------------------------------------------------------
 router.post("/", authenticate, requirePermission("register_evidence"), upload.array("files"), // Handle multiple files
 async (req, res) => {
-    const multerReq = req;
+    const uploaded = req.files ?? [];
     try {
-        // Multipart form data fields are strings, need to parse if JSON
-        const caseId = req.body.caseId?.trim();
-        const { type, description, collectionDate, location, tags, // might come as stringified JSON or plain text
-        status, officerNotes, } = req.body;
-        // Validate required fields
-        if (!caseId || !type || !description || !collectionDate || !location) {
-            // Clean up uploaded files if validation fails
-            if (multerReq.files) {
-                multerReq.files.forEach(f => fs.unlinkSync(f.path));
-            }
-            res.status(400).json({
-                error: "Missing required fields",
-                required: ["caseId", "type", "description", "collectionDate", "location"],
-            });
-            return;
-        }
-        // Validate type
-        const validTypes = ["Physical", "Digital", "Testimonial"];
-        if (!validTypes.includes(type)) {
-            if (multerReq.files)
-                multerReq.files.forEach(f => fs.unlinkSync(f.path));
-            res.status(400).json({
-                error: `Invalid evidence type "${type}"`,
-                valid_types: validTypes,
-            });
-            return;
-        }
-        // Validate status against config
-        const validStatuses = getValidStatuses();
-        const evidenceStatus = status ?? validStatuses[0];
-        if (!isValidStatus(evidenceStatus)) {
-            if (multerReq.files)
-                multerReq.files.forEach(f => fs.unlinkSync(f.path));
-            res.status(400).json({
-                error: `Invalid status "${evidenceStatus}".`,
-                valid_statuses: validStatuses,
-            });
-            return;
-        }
-        // Handle Tags parsing safely
-        let parsedTags = null;
-        if (tags) {
-            try {
-                parsedTags = typeof tags === 'string' ? tags : JSON.stringify(tags);
-                // Check if it's actually parsable if it's a string, or just leave as string
-                // Ideally we store JSON string in DB.
-            }
-            catch (e) {
-                parsedTags = tags;
-            }
-        }
-        // Transaction: Create Evidence + Create EvidenceFiles
-        const result = await prisma.$transaction(async (tx) => {
-            const evidence = await tx.evidence.create({
-                data: {
-                    caseId,
-                    type,
-                    description,
-                    collectionDate: new Date(collectionDate),
-                    location,
-                    tags: parsedTags,
-                    status: evidenceStatus,
-                    officerNotes: officerNotes ?? null,
-                    collectedById: req.user.id,
-                    currentCustodianId: req.user.id,
-                },
-                include: {
-                    collectedBy: {
-                        select: { id: true, username: true, fullName: true, role: true },
-                    },
-                },
-            });
-            // Create EvidenceFile records
-            // Create EvidenceFile records
-            if (multerReq.files && Array.isArray(multerReq.files) && multerReq.files.length > 0) {
-                const filePromises = multerReq.files.map(file => {
-                    // Calculate hash (optional, maybe later) but we have size/mimetype
-                    return tx.evidenceFile.create({
-                        data: {
-                            evidenceId: evidence.id,
-                            fileName: file.originalname,
-                            fileSize: file.size,
-                            mimeType: file.mimetype,
-                            sha256Hash: "PENDING_HASH", // TODO: compute hash
-                            uploadedAt: new Date(),
-                        }
-                    });
-                });
-                await Promise.all(filePromises);
-            }
-            return evidence;
-        });
-        // Log the action
-        await prisma.accessLog.create({
-            data: {
-                evidenceId: result.id,
-                userId: req.user.id,
-                action: "register",
-                result: "success",
-                ipAddress: req.ip ?? null,
-                userAgent: req.headers["user-agent"] ?? null,
-            },
-        });
-        res.status(201).json({ success: true, evidence: result });
+        const stored = await storeUploadedFiles(uploaded);
+        const { evidence, anchoring } = await createEvidence({
+            evidenceNumber: req.body.evidenceId ?? req.body.evidenceNumber,
+            caseId: req.body.caseId,
+            type: req.body.type,
+            description: req.body.description,
+            collectionDate: req.body.collectionDate,
+            location: req.body.location,
+            tags: req.body.tags,
+            status: req.body.status,
+            officerNotes: req.body.officerNotes,
+            officerName: req.body.officerName,
+        }, req.user, stored);
+        res.status(201).json({ success: true, evidence, anchoring });
     }
     catch (err) {
-        // Clean up files on error
-        if (multerReq.files) {
-            multerReq.files.forEach(f => {
-                if (fs.existsSync(f.path))
-                    fs.unlinkSync(f.path);
-            });
+        removeUploadedFiles(uploaded);
+        sendError(res, err, "Failed to register evidence");
+    }
+});
+// ---------------------------------------------------------------------------
+// POST /api/v1/evidence/batch — register multiple evidence items (JSON, no files)
+// ---------------------------------------------------------------------------
+router.post("/batch", authenticate, requirePermission("register_evidence"), async (req, res) => {
+    try {
+        const { items } = req.body;
+        if (!Array.isArray(items) || items.length === 0) {
+            res.status(400).json({ error: "items array is required" });
+            return;
         }
-        res.status(500).json({ error: "Failed to register evidence", details: err.message });
+        if (items.length > 50) {
+            res.status(400).json({ error: "Maximum 50 items per batch" });
+            return;
+        }
+        const results = [];
+        for (const item of items) {
+            try {
+                const { evidence, anchoring } = await createEvidence({ ...item, evidenceNumber: item.evidenceId ?? item.evidenceNumber }, req.user);
+                results.push({ success: true, evidence, anchoring });
+            }
+            catch (err) {
+                results.push({ success: false, item, error: err.message });
+            }
+        }
+        const successful = results.filter((r) => r.success).length;
+        res.status(successful > 0 ? 201 : 400).json({ results, successful, failed: results.length - successful });
+    }
+    catch (err) {
+        res.status(500).json({ error: "Failed to process batch registration", details: err.message });
+    }
+});
+// ---------------------------------------------------------------------------
+// DELETE /api/v1/evidence/bulk — delete several evidence items
+// ---------------------------------------------------------------------------
+router.delete("/bulk", authenticate, requirePermission("delete_evidence"), async (req, res) => {
+    try {
+        const ids = req.body?.evidenceIds;
+        if (!Array.isArray(ids) || ids.length === 0) {
+            res.status(400).json({ error: "evidenceIds array is required" });
+            return;
+        }
+        const results = [];
+        for (const ref of ids) {
+            try {
+                const id = await findEvidenceId(String(ref));
+                if (!id) {
+                    results.push({ evidenceId: ref, success: false, error: "Evidence not found." });
+                    continue;
+                }
+                const deleted = await deleteEvidence(id);
+                await audit(req, { action: "EVIDENCE_DELETED", entityType: "Evidence", entityId: id, details: deleted });
+                results.push({ ...deleted, requested: ref, success: true });
+            }
+            catch (err) {
+                results.push({ evidenceId: ref, success: false, error: err.message });
+            }
+        }
+        const successful = results.filter((r) => r.success).length;
+        res.json({ results, successful, failed: results.length - successful });
+    }
+    catch (err) {
+        res.status(500).json({ error: "Failed to bulk delete evidence", details: err.message });
     }
 });
 // ---------------------------------------------------------------------------
@@ -160,75 +139,11 @@ async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get("/", authenticate, async (req, res) => {
     try {
-        const { caseId, type, status, search, page = "1", limit = "20" } = req.query;
-        const where = {};
-        if (caseId)
-            where.caseId = caseId;
-        if (type)
-            where.type = type;
-        if (status) {
-            // Validate status against config
-            if (!isValidStatus(status)) {
-                res.status(400).json({
-                    error: `Invalid status filter "${status}"`,
-                    valid_statuses: getValidStatuses(),
-                });
-                return;
-            }
-            where.status = status;
-        }
-        if (search) {
-            where.OR = [
-                { description: { contains: search } },
-                { caseId: { contains: search } },
-            ];
-        }
-        // -----------------------------------------------------------------------
-        // RBAC: Data Isolation
-        // -----------------------------------------------------------------------
-        const user = req.user;
-        const canViewAll = ["admin", "auditor"].includes(user.role);
-        console.log(`[GET /evidence] User: ${user.username} (${user.role}), CaseID Filter: ${caseId || "NONE"}`);
-        if (!canViewAll) {
-            // Users can only see evidence they collected OR currently hold
-            // UNLESS they are querying a specific Crime Box (Case ID).
-            // Since membership is client-side key-based in this MVP, we trust knowledge of the caseId.
-            if (caseId) {
-                // User is querying a specific box. Allow it if they know the ID.
-                // We strictly filter by this caseId.
-                where.caseId = caseId;
-                console.log(`[GET /evidence] Accessing Box: ${caseId} (Allowed)`);
-            }
-            else {
-                // User is viewing their personal evidence log (no box context).
-                // Restrict to what they collected or hold.
-                const accessFilter = {
-                    OR: [
-                        { collectedById: user.id },
-                        { currentCustodianId: user.id }
-                    ]
-                };
-                if (where.OR) {
-                    // If we already have an OR for search, we need to wrap everything in an AND
-                    where.AND = [
-                        accessFilter,
-                        { OR: where.OR }
-                    ];
-                    delete where.OR; // Move search OR inside AND
-                }
-                else {
-                    where.OR = accessFilter.OR;
-                }
-                console.log(`[GET /evidence] Personal Log Access (Restricted to Owner/Custodian)`);
-            }
-        }
-        else {
-            console.log(`[GET /evidence] Admin Access (View All)`);
-        }
-        const pageNum = Math.max(1, parseInt(page, 10));
-        const pageSize = Math.min(100, Math.max(1, parseInt(limit, 10)));
+        const { page = "1", limit = "20" } = req.query;
+        const where = await buildEvidenceSearchWhere(req.query, req.user);
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const pageSize = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
         const skip = (pageNum - 1) * pageSize;
-        console.log(`[GET /evidence] Prisma Where Clause:`, JSON.stringify(where, null, 2));
         const [evidence, total] = await Promise.all([
             prisma.evidence.findMany({
                 where,
@@ -258,33 +173,96 @@ router.get("/", authenticate, async (req, res) => {
         });
     }
     catch (err) {
-        res.status(500).json({ error: "Failed to search evidence", details: err.message });
+        sendError(res, err, "Failed to search evidence");
     }
 });
 // ---------------------------------------------------------------------------
-// GET /api/v1/evidence/:id — get evidence detail
+// GET /api/v1/evidence/retention/expiring — evidence nearing/exceeding retention
+// ---------------------------------------------------------------------------
+router.get("/retention/expiring", authenticate, async (req, res) => {
+    try {
+        if (!["admin", "head_officer", "auditor"].includes(req.user.role)) {
+            res.status(403).json({ error: "Insufficient permissions" });
+            return;
+        }
+        const { days = "30" } = req.query;
+        const thresholdDays = parseInt(days, 10);
+        const now = new Date();
+        const thresholdDate = new Date(now.getTime() + thresholdDays * 24 * 60 * 60 * 1000);
+        const expiring = await prisma.evidence.findMany({
+            where: {
+                retentionDeadline: { not: null, lte: thresholdDate },
+                status: { notIn: ["Destroyed", "Disposed", "Archived"] },
+            },
+            include: {
+                collectedBy: { select: { id: true, username: true, fullName: true, role: true } },
+                currentCustodian: { select: { id: true, username: true, fullName: true, role: true } },
+            },
+            orderBy: { retentionDeadline: "asc" },
+        });
+        res.json({
+            count: expiring.length,
+            thresholdDays,
+            evidence: expiring.map((e) => ({
+                ...e,
+                daysUntilExpiry: e.retentionDeadline ? Math.ceil((new Date(e.retentionDeadline).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null,
+                isExpired: e.retentionDeadline ? new Date(e.retentionDeadline) < now : false,
+            })),
+        });
+    }
+    catch (err) {
+        res.status(500).json({ error: "Failed to fetch expiring evidence", details: err.message });
+    }
+});
+// ---------------------------------------------------------------------------
+// POST /api/v1/evidence/retention/notify-expired — notify about expired retention
+// ---------------------------------------------------------------------------
+router.post("/retention/notify-expired", authenticate, async (req, res) => {
+    try {
+        if (!["admin", "head_officer"].includes(req.user.role)) {
+            res.status(403).json({ error: "Insufficient permissions" });
+            return;
+        }
+        const now = new Date();
+        const expired = await prisma.evidence.findMany({
+            where: {
+                retentionDeadline: { not: null, lt: now },
+                status: { notIn: ["Destroyed", "Disposed", "Archived"] },
+            },
+            select: { id: true, retentionDeadline: true, type: true, currentCustodianId: true, collectedById: true, caseId: true },
+        });
+        const admins = await prisma.user.findMany({ where: { role: "admin" }, select: { id: true } });
+        let notified = 0;
+        for (const ev of expired) {
+            const recipients = new Set([ev.currentCustodianId, ev.collectedById, ...admins.map((a) => a.id)]);
+            for (const userId of recipients) {
+                await prisma.notification.create({
+                    data: {
+                        userId,
+                        type: "retention_expiry",
+                        title: "Retention Period Expired",
+                        message: `Evidence ${ev.type} (Case: ${ev.caseId}) has exceeded its retention period. Action required.`,
+                        link: `/dashboard/${userId}/evidence/${ev.id}`,
+                    },
+                });
+                notified++;
+            }
+        }
+        res.json({ success: true, expiredCount: expired.length, notificationsSent: notified });
+    }
+    catch (err) {
+        res.status(500).json({ error: "Failed to send retention expiry notifications", details: err.message });
+    }
+});
+// ---------------------------------------------------------------------------
+// GET /api/v1/evidence/:id — get evidence detail (UUID, evidence number or CID)
 // ---------------------------------------------------------------------------
 router.get("/:id", authenticate, async (req, res) => {
     try {
-        const evidence = await prisma.evidence.findUnique({
-            where: { id: req.params.id },
-            include: {
-                collectedBy: {
-                    select: { id: true, username: true, fullName: true, role: true, department: true },
-                },
-                currentCustodian: {
-                    select: { id: true, username: true, fullName: true, role: true, department: true },
-                },
-                files: true,
-                custodyEvents: {
-                    orderBy: { timestamp: "asc" },
-                    include: {
-                        fromUser: { select: { id: true, username: true, fullName: true } },
-                        toUser: { select: { id: true, username: true, fullName: true } },
-                    },
-                },
-            },
-        });
+        const id = await resolveIdOr404(req, res);
+        if (!id)
+            return;
+        const evidence = await getEvidenceDetail(id);
         if (!evidence) {
             res.status(404).json({ error: "Evidence not found." });
             return;
@@ -311,142 +289,197 @@ router.get("/:id", authenticate, async (req, res) => {
 // ---------------------------------------------------------------------------
 router.put("/:id", authenticate, requirePermission("register_evidence"), async (req, res) => {
     try {
-        const evidence = await prisma.evidence.findUnique({ where: { id: req.params.id } });
-        if (!evidence) {
-            res.status(404).json({ error: "Evidence not found." });
+        const id = await resolveIdOr404(req, res);
+        if (!id)
             return;
-        }
-        if (evidence.locked) {
-            res.status(409).json({
-                error: "Evidence is locked due to a pending custody transfer.",
-                hint: "Resolve the pending transfer before modifying evidence.",
-            });
-            return;
-        }
-        const { description, tags, status, officerNotes, location } = req.body;
-        // Validate status if provided
-        if (status && !isValidStatus(status)) {
-            res.status(400).json({
-                error: `Invalid status "${status}"`,
-                valid_statuses: getValidStatuses(),
-            });
-            return;
-        }
-        // Validate status transition if status is being changed
-        if (status && status !== evidence.status && !isValidStatusTransition(evidence.status, status)) {
-            res.status(400).json({
-                error: `Invalid status transition from "${evidence.status}" to "${status}"`,
-                current_status: evidence.status,
-                valid_transitions: VALID_STATUS_TRANSITIONS[evidence.status] || [],
-            });
-            return;
-        }
-        const updated = await prisma.evidence.update({
-            where: { id: req.params.id },
-            data: {
-                ...(description !== undefined && { description }),
-                ...(tags !== undefined && { tags: JSON.stringify(tags) }),
-                ...(status !== undefined && { status }),
-                ...(officerNotes !== undefined && { officerNotes }),
-                ...(location !== undefined && { location }),
-            },
-        });
-        // Log modification
-        await prisma.accessLog.create({
-            data: {
-                evidenceId: evidence.id,
-                userId: req.user.id,
-                action: "modify",
-                result: "success",
-                ipAddress: req.ip ?? null,
-                userAgent: req.headers["user-agent"] ?? null,
-            },
-        });
-        res.json({ success: true, evidence: updated });
+        const { description, tags, status, officerNotes, location, caseId, officerName, notes } = req.body;
+        const { evidence, anchoring } = await updateEvidence(id, { description, tags, status, officerNotes, location, caseId, officerName }, req.user, notes);
+        res.json({ success: true, evidence, anchoring });
     }
     catch (err) {
-        res.status(500).json({ error: "Failed to update evidence", details: err.message });
+        sendError(res, err, "Failed to update evidence");
     }
 });
 // ---------------------------------------------------------------------------
-// POST /api/v1/evidence/:id/verify — verify file integrity
+// POST /api/v1/evidence/:id/status — move evidence to a new lifecycle status
+// Body: { newStatus | status, notes? }
+// ---------------------------------------------------------------------------
+router.post("/:id/status", authenticate, requirePermission("update_evidence_status"), async (req, res) => {
+    try {
+        const id = await resolveIdOr404(req, res);
+        if (!id)
+            return;
+        const newStatus = req.body.newStatus ?? req.body.status;
+        if (!newStatus) {
+            res.status(400).json({ error: "newStatus is required", valid_statuses: getValidStatuses() });
+            return;
+        }
+        const { evidence, anchoring } = await updateEvidence(id, { status: newStatus }, req.user, req.body.notes);
+        res.json({ success: true, evidence, anchoring });
+    }
+    catch (err) {
+        sendError(res, err, "Failed to update evidence status");
+    }
+});
+// ---------------------------------------------------------------------------
+// DELETE /api/v1/evidence/:id — delete evidence (ledger history is kept)
+// ---------------------------------------------------------------------------
+router.delete("/:id", authenticate, requirePermission("delete_evidence"), async (req, res) => {
+    try {
+        const id = await resolveIdOr404(req, res);
+        if (!id)
+            return;
+        const deleted = await deleteEvidence(id);
+        await audit(req, { action: "EVIDENCE_DELETED", entityType: "Evidence", entityId: id, details: deleted });
+        res.json({ success: true, ...deleted });
+    }
+    catch (err) {
+        sendError(res, err, "Failed to delete evidence");
+    }
+});
+// ---------------------------------------------------------------------------
+// POST /api/v1/evidence/:id/verify — verify integrity
+//
+// With no body: re-hashes stored files, rebuilds the metadata hash and checks
+// both against IPFS and the ledger → status VERIFIED / TAMPERED / UNVERIFIABLE.
+// With { fileContent } (base64): additionally checks that file against the
+// recorded file hash.
 // ---------------------------------------------------------------------------
 router.post("/:id/verify", authenticate, async (req, res) => {
     try {
-        const evidence = await prisma.evidence.findUnique({
-            where: { id: req.params.id },
-            include: { files: true },
-        });
-        if (!evidence) {
-            res.status(404).json({ error: "Evidence not found." });
+        const id = await resolveIdOr404(req, res);
+        if (!id)
             return;
-        }
-        const { fileContent } = req.body; // base64 encoded file for verification
-        let integrityResult;
-        if (fileContent && evidence.fileHash) {
+        const result = await verifyEvidence(id);
+        let providedFile;
+        const { fileContent } = req.body ?? {};
+        if (fileContent && result.fileHash) {
             const buffer = Buffer.from(fileContent, "base64");
-            const matches = verifyHash(buffer, evidence.fileHash);
-            integrityResult = {
+            const matches = verifyHash(buffer, result.fileHash);
+            providedFile = {
                 status: matches ? "PASS" : "FAIL",
-                expectedHash: evidence.fileHash,
-                actualHash: computeSHA256String(fileContent),
+                expectedHash: result.fileHash,
+                actualHash: computeSHA256(buffer),
                 verified: matches,
             };
         }
-        else {
-            integrityResult = {
-                status: evidence.fileHash ? "NO_FILE_PROVIDED" : "NO_HASH_RECORDED",
-                expectedHash: evidence.fileHash,
-                message: evidence.fileHash
-                    ? "Provide fileContent (base64) to verify against stored hash."
-                    : "No file hash was recorded for this evidence.",
-            };
-        }
+        await logActivity(req.user, "verified_integrity", "Evidence", id, result.status);
+        await audit(req, { action: "INTEGRITY_VERIFIED", entityType: "Evidence", entityId: id, details: { status: result.status } });
+        const evidence = await prisma.evidence.findUnique({ where: { id }, include: { files: true } });
         res.json({
-            evidenceId: evidence.id,
-            caseId: evidence.caseId,
-            integrity: integrityResult,
-            files: evidence.files.map((f) => ({
+            evidenceId: id,
+            caseId: evidence?.caseId,
+            integrity: { ...result, ...(providedFile && { providedFile }) },
+            files: (evidence?.files ?? []).map((f) => ({
                 id: f.id,
                 fileName: f.fileName,
                 sha256Hash: f.sha256Hash,
+                ipfsCid: f.ipfsCid,
             })),
         });
     }
     catch (err) {
-        res.status(500).json({ error: "Failed to verify integrity", details: err.message });
+        sendError(res, err, "Failed to verify integrity");
     }
 });
 // ---------------------------------------------------------------------------
-// GET /api/v1/evidence/:evidenceId/files/:fileId/download — download an attached file
+// GET /api/v1/evidence/:id/versions — full version history (who / when / what)
 // ---------------------------------------------------------------------------
-router.get("/:evidenceId/files/:fileId/download", authenticate, async (req, res) => {
+router.get("/:id/versions", authenticate, async (req, res) => {
     try {
-        const { evidenceId, fileId } = req.params;
-        // Check if evidence exists and user has access (basic check for now)
-        const evidence = await prisma.evidence.findUnique({
-            where: { id: evidenceId },
+        const id = await resolveIdOr404(req, res);
+        if (!id)
+            return;
+        const versions = await prisma.evidenceVersion.findMany({
+            where: { evidenceId: id },
+            orderBy: { version: "asc" },
+            include: { changedBy: { select: { id: true, username: true, fullName: true, role: true } } },
         });
-        if (!evidence) {
-            res.status(404).json({ error: "Evidence not found" });
+        res.json({ evidenceId: id, total: versions.length, versions });
+    }
+    catch (err) {
+        res.status(500).json({ error: "Failed to fetch version history", details: err.message });
+    }
+});
+// ---------------------------------------------------------------------------
+// POST /api/v1/evidence/:id/anchor — retry anchoring after an IPFS/ledger outage
+// ---------------------------------------------------------------------------
+router.post("/:id/anchor", authenticate, requirePermission("register_evidence"), async (req, res) => {
+    try {
+        const id = await resolveIdOr404(req, res);
+        if (!id)
             return;
-        }
-        // Find the file record
-        const fileRecord = await prisma.evidenceFile.findUnique({
-            where: { id: fileId, evidenceId: evidenceId },
-        });
-        if (!fileRecord) {
-            res.status(404).json({ error: "File record not found" });
+        const anchoring = await recordEvidenceChange(id, { action: "REANCHORED", actor: req.user });
+        res.json({ success: anchoring.anchorStatus === "ANCHORED", anchoring });
+    }
+    catch (err) {
+        sendError(res, err, "Failed to anchor evidence");
+    }
+});
+// ---------------------------------------------------------------------------
+// GET /api/v1/evidence/:id/report — evidence report as PDF
+// ---------------------------------------------------------------------------
+router.get("/:id/report", authenticate, requirePermission("generate_reports"), async (req, res) => {
+    try {
+        const id = await resolveIdOr404(req, res);
+        if (!id)
             return;
-        }
-        // Construct file path
-        const filePath = path.join(process.cwd(), "uploads", fileRecord.fileName);
-        if (!fs.existsSync(filePath)) {
-            res.status(404).json({ error: "Physical file not found on server" });
-            return;
-        }
-        // Download
-        res.download(filePath, fileRecord.fileName);
+        const { buffer, fileName } = await generateEvidenceReport(id, req.user);
+        await logActivity(req.user, "generated_report", "Evidence", id, fileName);
+        await audit(req, { action: "REPORT_GENERATED", entityType: "Evidence", entityId: id, statusCode: 200 });
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+        res.send(buffer);
+    }
+    catch (err) {
+        sendError(res, err, "Failed to generate report");
+    }
+});
+// ---------------------------------------------------------------------------
+// GET /api/v1/evidence/:id/download — download the primary evidence file
+// GET /api/v1/evidence/:id/files/:fileId/download — download a specific file
+// ---------------------------------------------------------------------------
+async function sendEvidenceFile(req, res, fileId) {
+    const id = await resolveIdOr404(req, res);
+    if (!id)
+        return;
+    const fileRecord = fileId
+        ? await prisma.evidenceFile.findFirst({ where: { id: fileId, evidenceId: id } })
+        : await prisma.evidenceFile.findFirst({ where: { evidenceId: id }, orderBy: [{ uploadedAt: "asc" }, { id: "asc" }] });
+    if (!fileRecord) {
+        res.status(404).json({ error: "File record not found" });
+        return;
+    }
+    let content;
+    try {
+        content = await readEvidenceFile(fileRecord);
+    }
+    catch (err) {
+        res.status(404).json({ error: "File content not found", details: err.message });
+        return;
+    }
+    const actualHash = computeSHA256(content);
+    await prisma.accessLog.create({
+        data: { evidenceId: id, userId: req.user.id, action: "download", result: "success", ipAddress: req.ip ?? null, userAgent: req.headers["user-agent"] ?? null },
+    });
+    await audit(req, { action: "FILE_DOWNLOADED", entityType: "EvidenceFile", entityId: fileRecord.id, statusCode: 200 });
+    res.setHeader("Content-Type", fileRecord.mimeType || "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(fileRecord.fileName)}"`);
+    res.setHeader("X-File-SHA256", actualHash);
+    res.setHeader("X-File-Integrity", actualHash === fileRecord.sha256Hash ? "VERIFIED" : "TAMPERED");
+    res.send(content);
+}
+router.get("/:id/download", authenticate, async (req, res) => {
+    try {
+        await sendEvidenceFile(req, res);
+    }
+    catch (err) {
+        res.status(500).json({ error: "Failed to download file", details: err.message });
+    }
+});
+router.get("/:id/files/:fileId/download", authenticate, async (req, res) => {
+    try {
+        await sendEvidenceFile(req, res, req.params.fileId);
     }
     catch (err) {
         res.status(500).json({ error: "Failed to download file", details: err.message });
