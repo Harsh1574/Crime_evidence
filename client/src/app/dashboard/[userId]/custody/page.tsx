@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import axios from "axios";
+import { api, apiError } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import Link from "next/link";
 import {
     ArrowRightLeft,
@@ -22,10 +23,11 @@ export default function CustodyDashboardPage() {
     const [actionLoading, setActionLoading] = useState<string | null>(null);
     const params = useParams();
     const userId = params.userId as string;
+    const { user, can } = useAuth();
 
     const fetchTransfers = async () => {
         try {
-            const response = await axios.get("/api/v1/custody/pending");
+            const response = await api.get("/api/v1/custody/pending");
             setIncoming(response.data.incoming);
             setOutgoing(response.data.outgoing);
         } catch (err) {
@@ -40,34 +42,34 @@ export default function CustodyDashboardPage() {
     }, []);
 
     const handleApprove = async (transferId: string) => {
-        if (!confirm("Confirm receipt of this evidence? This will digitally sign the transfer.")) return;
+        if (!confirm("Confirm receipt of this evidence? This will digitally sign the transfer and make you the custodian.")) return;
         setActionLoading(transferId);
         try {
-            // Mock signature for demo
-            const signature = `SIG-${Math.random().toString(36).substring(7).toUpperCase()}`;
-            await axios.post(`/api/v1/custody/transfer/${transferId}/approve`, { signature });
+            // Receipt signature: SHA-256 of who accepted what and when (the server chains it to the custody history)
+            const payload = `${transferId}|${user?.id}|${new Date().toISOString()}`;
+            const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
+            const signature = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+            await api.post(`/api/v1/custody/transfer/${transferId}/approve`, { signature });
             await fetchTransfers(); // Refresh list
-            alert("Transfer approved successfully.");
+            alert("Transfer accepted. You are now the custodian.");
         } catch (error: unknown) {
-            const err = error as { response?: { data?: { error?: string } } };
-            alert(err.response?.data?.error || "Failed to approve transfer.");
+            alert(apiError(error, "Failed to accept transfer."));
         } finally {
             setActionLoading(null);
         }
     };
 
     const handleReject = async (transferId: string) => {
-        const reason = prompt("Enter reason for rejection:");
+        const reason = prompt("Enter a note explaining the rejection:");
         if (!reason) return;
 
         setActionLoading(transferId);
         try {
-            await axios.post(`/api/v1/custody/transfer/${transferId}/reject`, { reason });
+            await api.post(`/api/v1/custody/transfer/${transferId}/reject`, { reason });
             await fetchTransfers();
-            alert("Transfer rejected.");
+            alert("Transfer rejected. Custody stays with the sender.");
         } catch (error: unknown) {
-            const err = error as { response?: { data?: { error?: string } } };
-            alert(err.response?.data?.error || "Failed to reject transfer.");
+            alert(apiError(error, "Failed to reject transfer."));
         } finally {
             setActionLoading(null);
         }
@@ -112,7 +114,7 @@ export default function CustodyDashboardPage() {
                                     <div className="flex items-start justify-between mb-3">
                                         <div className="space-y-1">
                                             <Link href={`/dashboard/${userId}/evidence/${transfer.evidence.id}`} className="font-semibold hover:underline flex items-center gap-2">
-                                                {transfer.evidence.caseId}
+                                                {transfer.evidence.evidenceNumber ?? transfer.evidence.caseId}
                                                 <span className="text-xs font-normal text-muted-foreground border border-border px-1.5 py-0.5 rounded">
                                                     {transfer.evidence.type}
                                                 </span>
@@ -129,6 +131,7 @@ export default function CustodyDashboardPage() {
 
                                     <p className="text-xs text-muted-foreground italic mb-4">&quot;{transfer.reason}&quot;</p>
 
+                                    {can("accept_transfers") ? (
                                     <div className="flex gap-2">
                                         <button
                                             onClick={() => handleApprove(transfer.id)}
@@ -136,7 +139,7 @@ export default function CustodyDashboardPage() {
                                             className="flex-1 inline-flex items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                                         >
                                             {actionLoading === transfer.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                                            Approve
+                                            Accept
                                         </button>
                                         <button
                                             onClick={() => handleReject(transfer.id)}
@@ -147,6 +150,9 @@ export default function CustodyDashboardPage() {
                                             Reject
                                         </button>
                                     </div>
+                                    ) : (
+                                        <p className="text-xs text-amber-400">Your role cannot accept custody transfers.</p>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -176,7 +182,7 @@ export default function CustodyDashboardPage() {
                                     <div className="flex items-start justify-between mb-3">
                                         <div className="space-y-1">
                                             <Link href={`/dashboard/${userId}/evidence/${transfer.evidence.id}`} className="font-semibold hover:underline">
-                                                {transfer.evidence.caseId}
+                                                {transfer.evidence.evidenceNumber ?? transfer.evidence.caseId}
                                             </Link>
                                             <p className="text-sm text-muted-foreground line-clamp-1">{transfer.evidence.description}</p>
                                         </div>

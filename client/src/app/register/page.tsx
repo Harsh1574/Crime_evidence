@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import axios from "axios";
+import { api, apiError } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { UserPlus, User, Mail, Shield, Lock, Loader2, CheckCircle2, ArrowRight, Activity, BadgeCheck, FileCheck, AlertCircle } from "lucide-react";
@@ -53,14 +53,14 @@ export default function RegisterPage() {
 
         try {
             await new Promise(resolve => setTimeout(resolve, 800));
-            const response = await axios.post("/api/v1/auth/register", formData);
+            const response = await api.post("/api/v1/auth/register", formData);
 
             if (response.data.success) {
                 setSuccess(true);
                 setTimeout(() => router.push("/login"), 2000);
             }
-        } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-            setError(err.response?.data?.error || "Registration failed. Please try again.");
+        } catch (err) {
+            setError(apiError(err, "Registration failed. Please try again."));
         } finally {
             setLoading(false);
         }
@@ -74,6 +74,9 @@ export default function RegisterPage() {
     const roles = [
         { id: 'officer', label: 'Officer', icon: Shield },
         { id: 'head_officer', label: 'Head Officer', icon: Activity },
+        { id: 'collector', label: 'Evidence Collector', icon: FileCheck },
+        { id: 'forensic_analyst', label: 'Forensic Analyst', icon: BadgeCheck },
+        { id: 'prosecutor', label: 'Prosecutor', icon: User },
         { id: 'lawyer', label: 'Lawyer', icon: User },
         { id: 'judge', label: 'Judge', icon: CheckCircle2 },
     ];

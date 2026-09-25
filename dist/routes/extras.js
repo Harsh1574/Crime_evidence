@@ -5,6 +5,7 @@ import { Router } from "express";
 import { authenticate, prisma } from "../middleware/auth.js";
 import QRCode from "qrcode";
 import { verifyEvidence } from "../services/evidence.js";
+import { getRoles } from "../utils/config.js";
 const router = Router();
 // ---------------------------------------------------------------------------
 // GET /api/v1/notifications
@@ -39,6 +40,46 @@ router.put("/notifications/:id/read", authenticate, async (req, res) => {
     }
     catch (err) {
         res.status(500).json({ error: "Failed to mark notification read", details: err.message });
+    }
+});
+// ---------------------------------------------------------------------------
+// GET /api/v1/users?search=&role= — active users for pickers (transfer, case officers)
+// ---------------------------------------------------------------------------
+router.get("/users", authenticate, async (req, res) => {
+    try {
+        const search = req.query.search?.trim();
+        const role = req.query.role?.trim();
+        const users = await prisma.user.findMany({
+            where: {
+                isActive: true,
+                ...(role && { role: { equals: role, mode: "insensitive" } }),
+                ...(search && {
+                    OR: [
+                        { username: { contains: search, mode: "insensitive" } },
+                        { fullName: { contains: search, mode: "insensitive" } },
+                        { email: { contains: search, mode: "insensitive" } },
+                    ],
+                }),
+            },
+            select: { id: true, username: true, fullName: true, role: true, department: true, badgeNumber: true },
+            orderBy: { fullName: "asc" },
+            take: 50,
+        });
+        res.json({ users });
+    }
+    catch (err) {
+        res.status(500).json({ error: "Failed to fetch users", details: err.message });
+    }
+});
+// ---------------------------------------------------------------------------
+// GET /api/v1/roles — role names, display names and permissions
+// ---------------------------------------------------------------------------
+router.get("/roles", async (_req, res) => {
+    try {
+        res.json({ roles: getRoles().map((r) => ({ name: r.name, displayName: r.display_name, readOnly: r.read_only === true })) });
+    }
+    catch (err) {
+        res.status(500).json({ error: "Failed to fetch roles", details: err.message });
     }
 });
 // ---------------------------------------------------------------------------

@@ -249,7 +249,7 @@ router.get("/pending", authenticate, async (req, res) => {
                     status: "pending",
                 },
                 include: {
-                    evidence: { select: { id: true, caseId: true, type: true, description: true } },
+                    evidence: { select: { id: true, evidenceNumber: true, caseId: true, type: true, description: true } },
                     fromUser: { select: { id: true, username: true, fullName: true, department: true } },
                 },
                 orderBy: { timestamp: "desc" },
@@ -261,7 +261,7 @@ router.get("/pending", authenticate, async (req, res) => {
                     status: "pending",
                 },
                 include: {
-                    evidence: { select: { id: true, caseId: true, type: true, description: true } },
+                    evidence: { select: { id: true, evidenceNumber: true, caseId: true, type: true, description: true } },
                     toUser: { select: { id: true, username: true, fullName: true, department: true } },
                 },
                 orderBy: { timestamp: "desc" },

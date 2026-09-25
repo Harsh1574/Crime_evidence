@@ -7,9 +7,16 @@ import { ShieldCheck, ShieldOff, Loader2, FileText, User, Calendar, MapPin, Hash
 
 interface VerifyResult {
   verified: boolean;
+  integrityStatus?: "VERIFIED" | "TAMPERED" | "UNVERIFIABLE";
+  checks?: { name: string; passed: boolean | null }[];
   message?: string;
   evidence?: {
     id: string;
+    evidenceNumber?: string | null;
+    metadataHash?: string | null;
+    ipfsCid?: string | null;
+    ledgerTxId?: string | null;
+    anchorStatus?: string;
     caseId: string;
     type: string;
     description: string;
@@ -25,14 +32,14 @@ interface VerifyResult {
 export default function PublicVerifyPage() {
   const params = useParams();
   const hash = params.hash as string;
-  const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+  // Relative URL — next.config.ts proxies /api to the backend
 
   const [result, setResult] = useState<VerifyResult | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!hash) return;
-    axios.get(`${API}/api/v1/verify/${hash}`)
+    axios.get(`/api/v1/verify/${encodeURIComponent(hash)}`)
       .then(r => setResult(r.data))
       .catch(err => {
         if (err.response?.status === 404) setResult({ verified: false, message: "No evidence found matching this hash." });
@@ -58,16 +65,48 @@ export default function PublicVerifyPage() {
             <Loader2 className="h-10 w-10 animate-spin text-primary" />
             <p className="text-muted-foreground text-sm">Verifying hash against records…</p>
           </div>
-        ) : !result ? null : result.verified && result.evidence ? (
+        ) : !result ? null : result.evidence ? (
           <div className="space-y-6">
-            {/* Verified Banner */}
-            <div className="flex items-center gap-4 p-6 rounded-2xl bg-green-500/10 border border-green-500/30">
-              <ShieldCheck className="h-12 w-12 text-green-400 shrink-0" />
-              <div>
-                <p className="text-xl font-bold text-green-400">Verified ✓</p>
-                <p className="text-sm text-green-300/70 mt-0.5">This evidence record exists and has not been tampered with.</p>
+            {/* Result Banner */}
+            {result.verified ? (
+              <div className="flex items-center gap-4 p-6 rounded-2xl bg-green-500/10 border border-green-500/30">
+                <ShieldCheck className="h-12 w-12 text-green-400 shrink-0" />
+                <div>
+                  <p className="text-xl font-bold text-green-400">Verified ✓</p>
+                  <p className="text-sm text-green-300/70 mt-0.5">This evidence record exists, its files and metadata match their hashes, and the ledger agrees.</p>
+                </div>
               </div>
-            </div>
+            ) : result.integrityStatus === "TAMPERED" ? (
+              <div className="flex items-center gap-4 p-6 rounded-2xl bg-red-500/10 border border-red-500/30">
+                <ShieldOff className="h-12 w-12 text-red-400 shrink-0" />
+                <div>
+                  <p className="text-xl font-bold text-red-400">Tampering Detected ✗</p>
+                  <p className="text-sm text-red-300/70 mt-0.5">The record exists, but it no longer matches what was anchored on the ledger.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-4 p-6 rounded-2xl bg-amber-500/10 border border-amber-500/30">
+                <ShieldOff className="h-12 w-12 text-amber-400 shrink-0" />
+                <div>
+                  <p className="text-xl font-bold text-amber-400">Could Not Fully Verify</p>
+                  <p className="text-sm text-amber-300/70 mt-0.5">The record exists, but the ledger or IPFS could not be reached to confirm it.</p>
+                </div>
+              </div>
+            )}
+
+            {result.checks && result.checks.length > 0 && (
+              <div className="rounded-xl border border-border bg-card p-4 space-y-1">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Integrity Checks</p>
+                {result.checks.map(c => (
+                  <p key={c.name} className="text-xs font-mono">
+                    <span className={c.passed === true ? "text-green-400" : c.passed === false ? "text-red-400" : "text-amber-400"}>
+                      {c.passed === true ? "PASS" : c.passed === false ? "FAIL" : "N/A "}
+                    </span>{" "}
+                    {c.name}
+                  </p>
+                ))}
+              </div>
+            )}
 
             {/* Hash */}
             <div className="rounded-xl border border-border bg-card p-4 space-y-1">
@@ -78,6 +117,7 @@ export default function PublicVerifyPage() {
             {/* Evidence Details */}
             <div className="rounded-xl border border-border bg-card divide-y divide-border">
               {[
+                { icon: Hash, label: "Evidence ID", value: result.evidence.evidenceNumber ?? result.evidence.id },
                 { icon: FileText, label: "Type", value: result.evidence.type },
                 { icon: FileText, label: "Description", value: result.evidence.description },
                 { icon: MapPin, label: "Location", value: result.evidence.location },
@@ -86,12 +126,15 @@ export default function PublicVerifyPage() {
                 { icon: FileText, label: "Case ID", value: result.evidence.caseId },
                 { icon: FileText, label: "Status", value: result.evidence.status },
                 { icon: Calendar, label: "Registered On", value: new Date(result.evidence.createdAt).toLocaleString() },
+                { icon: Hash, label: "Metadata SHA-256", value: result.evidence.metadataHash ?? "—" },
+                { icon: Hash, label: "IPFS CID", value: result.evidence.ipfsCid ?? "—" },
+                { icon: Hash, label: "Ledger Tx ID", value: result.evidence.ledgerTxId ?? "—" },
               ].map(({ icon: Icon, label, value }) => (
                 <div key={label} className="flex items-start gap-3 px-5 py-3">
                   <Icon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                   <div>
                     <p className="text-xs text-muted-foreground">{label}</p>
-                    <p className="text-sm text-foreground font-medium">{value}</p>
+                    <p className="text-sm text-foreground font-medium break-all">{value}</p>
                   </div>
                 </div>
               ))}

@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
-import axios from "axios";
+import { api, apiError } from "@/lib/api";
 import Link from "next/link";
 import { Lock, AlertCircle, Loader2, ShieldCheck, ArrowRight, BadgeCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -51,14 +51,14 @@ export default function LoginPage() {
 
         try {
             const minDelay = new Promise(resolve => setTimeout(resolve, 800));
-            const apiCall = axios.post("/api/v1/auth/login", { username, password });
+            const apiCall = api.post("/api/v1/auth/login", { username, password });
             const [response] = await Promise.all([apiCall, minDelay]);
 
             if (response.data.success) {
                 login(response.data.token, response.data.user);
             }
-        } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-            setError(err.response?.data?.error || "Invalid username or password.");
+        } catch (err) {
+            setError(apiError(err, "Invalid username or password."));
         } finally {
             setLoading(false);
         }
@@ -170,40 +170,6 @@ export default function LoginPage() {
                             </motion.button>
                         </div>
                     </form>
-
-                    {/* Divider */}
-                    <div className="relative gsap-entry">
-                        <div className="absolute inset-0 flex items-center">
-                            <span className="w-full border-t border-[#1f2937]" />
-                        </div>
-                        <div className="relative flex justify-center text-xs">
-                            <span className="bg-[#0c0f14] px-3 text-[#4b5563]">Or connect with</span>
-                        </div>
-                    </div>
-
-                    {/* MetaMask */}
-                    <div className="gsap-entry">
-                        <button
-                            type="button"
-                            className="w-full flex items-center justify-center gap-3 rounded-lg border border-[#1f2937] bg-[#151921] py-3 text-sm font-medium text-white transition-all hover:bg-[#1c2230] hover:border-[#374151] group"
-                        >
-                            <svg className="h-5 w-5" viewBox="0 0 35 33" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <path d="M32.96 1L19.53 10.98l2.49-5.89L32.96 1z" fill="#E17726" stroke="#E17726" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M2.04 1l13.3 10.08-2.37-5.99L2.04 1zM28.18 23.73l-3.57 5.47 7.64 2.1 2.19-7.44-6.26-.13zM.58 23.86l2.18 7.44 7.63-2.1-3.57-5.47-6.24.13z" fill="#E27625" stroke="#E27625" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M10.05 14.52l-2.12 3.2 7.56.35-.26-8.13-5.18 4.58zM24.95 14.52l-5.25-4.68-.17 8.23 7.55-.35-2.13-3.2zM10.39 29.2l4.55-2.2-3.93-3.07-.62 5.27zM20.06 27l4.55 2.2-.62-5.27L20.06 27z" fill="#E27625" stroke="#E27625" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M24.61 29.2l-4.55-2.2.37 2.97-.04 1.25 4.22-2.02zM10.39 29.2l4.22 2.02-.03-1.25.36-2.97-4.55 2.2z" fill="#D5BFB2" stroke="#D5BFB2" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M14.69 22.15l-3.79-1.11 2.68-1.23 1.11 2.34zM20.31 22.15l1.11-2.34 2.69 1.23-3.8 1.11z" fill="#233447" stroke="#233447" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M10.39 29.2l.65-5.47-4.22.13 3.57 5.34zM23.96 23.73l.65 5.47 3.57-5.34-4.22-.13zM27.08 17.72l-7.55.35.7 3.88 1.11-2.34 2.69 1.23 3.05-3.12zM10.9 21.04l2.68-1.23 1.11 2.34.7-3.88-7.56-.35 3.07 3.12z" fill="#CC6228" stroke="#CC6228" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M7.83 17.72l3.15 6.15-.1-3.03-3.05-3.12zM24.03 20.84l-.11 3.03 3.16-6.15-3.05 3.12zM15.39 18.07l-.7 3.88.88 4.54.2-5.98-.38-2.44zM19.53 18.07l-.37 2.43.18 6 .9-4.55-.71-3.88z" fill="#E27525" stroke="#E27525" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M20.24 21.95l-.9 4.55.64.45 3.93-3.07.11-3.03-3.78 1.1zM10.9 20.85l.1 3.03 3.93 3.07.64-.45-.89-4.55-3.78-1.1z" fill="#F5841F" stroke="#F5841F" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M20.28 31.22l.04-1.25-.34-.3h-5.01l-.33.3.03 1.25-4.28-2.02 1.5 1.23 3.04 2.1h5.14l3.05-2.1 1.49-1.23-4.33 2.02z" fill="#C0AC9D" stroke="#C0AC9D" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M19.98 26.8l-.64-.45h-3.73l-.64.45-.36 2.97.33-.3h5.01l.34.3-.31-2.97z" fill="#161616" stroke="#161616" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M33.52 11.35l1.14-5.5L32.96 1l-12.98 9.63 5 4.21 7.06 2.06 1.56-1.82-.68-.49 1.08-.98-.83-.64 1.08-.82-.71-.55zM.34 5.85l1.15 5.5-.73.55 1.08.82-.83.64 1.08.98-.68.49 1.56 1.82 7.06-2.06 5-4.21L2.04 1 .34 5.85z" fill="#763E1A" stroke="#763E1A" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M32.04 16.9l-7.06-2.06 2.13 3.2-3.16 6.15 4.18-.05h6.26l-2.35-7.24zM10.05 14.84L2.99 16.9.66 24.14h6.24l4.18.05-3.15-6.15 2.12-3.2zM19.53 18.07l.45-7.78 2.04-5.52H12.98l2.04 5.52.45 7.78.17 2.45.01 5.97h3.73l.02-5.97.13-2.45z" fill="#F5841F" stroke="#F5841F" strokeWidth=".25" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                            <span>Connect MetaMask</span>
-                        </button>
-                    </div>
 
                     <p className="text-center text-sm text-[#6b7280]">
                         Don&apos;t have an account?{" "}

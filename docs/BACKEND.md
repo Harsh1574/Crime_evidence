@@ -103,7 +103,7 @@ is in [`postman_collection.json`](../postman_collection.json).
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| POST | `/api/auth/login` | `{ username, password }` → `{ token, user }` |
+| POST | `/api/auth/login` | `{ username, password }` → `{ token, user }` (user includes `permissions` and `readOnly`, used by the frontend to show/hide actions) |
 | POST | `/api/auth/logout` | Revokes the current token — reusing it returns **401** |
 | GET | `/api/auth/me` | Current user (incl. UUID) |
 | POST | `/api/auth/register` | `{ username, email, fullName, role, password }` |
@@ -193,6 +193,8 @@ Crime Box linked to the case) is attached to that case; case officers can see it
 | PUT | `/api/v1/notifications/read-all`, `/api/v1/notifications/:id/read` | mark read |
 | GET | `/api/v1/audit-log` | `?userId=&username=&action=&entityId=&from=&to=&page=&limit=` — **admin and auditor only** (403 for others) |
 | GET | `/api/v1/verify/:hash` | public; file hash, metadata hash or evidence ID |
+| GET | `/api/v1/users?search=&role=` | active users (for transfer and case-officer pickers) |
+| GET | `/api/v1/roles` | role names and display names |
 
 The audit log records every login (and failed login), logout, every write
 request with its status code, every 401/403 denial, report generation and file

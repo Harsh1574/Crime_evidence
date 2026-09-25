@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { useAuth } from "./AuthContext";
-import axios from "axios";
+import { api, apiError } from "@/lib/api";
 
 export type Permission = "read-write" | "read-only" | null;
 
@@ -43,7 +43,7 @@ export function CrimeBoxProvider({ children }: { children: React.ReactNode }) {
 
   const createBox = async (name: string, caseId: string) => {
     try {
-      const response = await axios.post("/api/v1/boxes", { name, caseId });
+      const response = await api.post("/api/v1/boxes", { name, caseId });
       if (response.data.success) {
         const { box } = response.data;
 
@@ -68,14 +68,14 @@ export function CrimeBoxProvider({ children }: { children: React.ReactNode }) {
       return null;
     } catch (error) {
       console.error("Failed to create box:", error);
-      alert("Failed to create Crime Box. Case ID might already exist.");
+      alert(apiError(error, "Failed to create Crime Box. Case ID might already exist."));
       return null;
     }
   };
 
   const joinBox = async (key: string): Promise<boolean> => {
     try {
-      const response = await axios.post("/api/v1/boxes/join", { key });
+      const response = await api.post("/api/v1/boxes/join", { key });
 
       if (response.data.success) {
         const { box, permission: perm } = response.data;
@@ -88,9 +88,9 @@ export function CrimeBoxProvider({ children }: { children: React.ReactNode }) {
         return true;
       }
       return false;
-    } catch (error: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+    } catch (error) {
       console.error("Failed to join box:", error);
-      alert(error.response?.data?.error || "Failed to join Crime Box.");
+      alert(apiError(error, "Failed to join Crime Box."));
       return false;
     }
   };

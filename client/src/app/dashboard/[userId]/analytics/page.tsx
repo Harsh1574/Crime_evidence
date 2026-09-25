@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import axios from "axios";
+import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useParams } from "next/navigation";
-import { BarChart2, FileText, Clock, Layers, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
+import { BarChart2, FileText, Clock, Layers, CheckCircle, AlertCircle, Trash2 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -17,6 +17,7 @@ interface Stats {
   totalCases: number;
   totalLabs: number;
   pendingAccessRequests: number;
+  pendingDisposals: number;
   unreadNotifications: number;
   evidenceByStatus: { status: string; count: number }[];
   evidenceByType: { type: string; count: number }[];
@@ -40,13 +41,12 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 export default function AnalyticsPage() {
   const { token } = useAuth();
   const params = useParams();
-  const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!token) return;
-    axios.get(`${API}/api/v1/stats`, { headers: { Authorization: `Bearer ${token}` } })
+    api.get("/api/v1/stats")
       .then(r => setStats(r.data))
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -60,10 +60,11 @@ export default function AnalyticsPage() {
 
   const summaryCards = [
     { label: "Total Evidence", value: stats.totalEvidence, icon: FileText, color: "text-primary" },
-    { label: "Active Cases", value: stats.totalCases, icon: Layers, color: "text-blue-400" },
+    { label: "Cases", value: stats.totalCases, icon: Layers, color: "text-blue-400" },
     { label: "Pending Transfers", value: stats.pendingTransfers, icon: Clock, color: "text-amber-400" },
     { label: "Pending Access Requests", value: stats.pendingAccessRequests, icon: AlertCircle, color: "text-red-400" },
     { label: "Lab Results", value: stats.totalLabs, icon: CheckCircle, color: "text-green-400" },
+    { label: "Pending Disposals", value: stats.pendingDisposals ?? 0, icon: Trash2, color: "text-red-400" },
     { label: "Unread Notifications", value: stats.unreadNotifications, icon: BarChart2, color: "text-purple-400" },
   ];
 

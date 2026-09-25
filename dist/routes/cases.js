@@ -9,7 +9,7 @@ const router = Router();
 const USER_SUMMARY = { select: { id: true, username: true, fullName: true, role: true, department: true } };
 const CASE_INCLUDE = {
     createdBy: { select: { id: true, username: true, fullName: true } },
-    crimeBoxes: { select: { id: true, name: true, caseRefId: true, createdAt: true } },
+    crimeBoxes: { select: { id: true, name: true, caseId: true, caseRefId: true, createdAt: true } },
     officers: { include: { user: USER_SUMMARY }, orderBy: { createdAt: "asc" } },
     _count: { select: { evidence: true } },
 };

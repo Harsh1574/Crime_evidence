@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import axios from "axios";
+import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useCrimeBox } from "@/context/CrimeBoxContext";
 import CreateCrimeBox from "@/components/crime-box/CreateCrimeBox";
 import JoinCrimeBox from "@/components/crime-box/JoinCrimeBox";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Key, Copy, Check, Eye, EyeOff } from "lucide-react";
+import { Key, Copy, Check, Eye, EyeOff, FilePlus, FolderPlus, Trash2, ScrollText, ArrowRightLeft } from "lucide-react";
 
 // ── Head-Officer-only component to reveal stored box keys ─────────────────────
 function ViewBoxKeys({ keys }: { keys: { privateKey: string; publicKey: string } }) {
@@ -65,14 +65,35 @@ function ViewBoxKeys({ keys }: { keys: { privateKey: string; publicKey: string }
 }
 
 
+interface DashboardStats {
+    totalEvidence: number;
+    pendingTransfers: number;
+    totalCases: number;
+    pendingDisposals: number;
+    pendingAccessRequests: number;
+    unreadNotifications: number;
+}
+
+interface ActivityLog {
+    id: string;
+    actorName: string;
+    action: string;
+    entityType: string;
+    entityLabel?: string;
+}
+
 export default function DashboardPage() {
-    const { user } = useAuth();
+    const { user, can, canAny } = useAuth();
     const { activeBox, permission, leaveBox } = useCrimeBox();
-    const [stats, setStats] = useState({
+    const [stats, setStats] = useState<DashboardStats>({
         totalEvidence: 0,
         pendingTransfers: 0,
+        totalCases: 0,
+        pendingDisposals: 0,
+        pendingAccessRequests: 0,
+        unreadNotifications: 0,
     });
-    const [recentActivity, setRecentActivity] = useState<any[]>([]);
+    const [recentActivity, setRecentActivity] = useState<ActivityLog[]>([]);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
     const params = useParams();
@@ -83,8 +104,8 @@ export default function DashboardPage() {
             try {
                 // Fetch stats and recent activity in parallel
                 const [statsRes, activityRes] = await Promise.all([
-                    axios.get("/api/v1/stats").catch(() => ({ data: { totalEvidence: 0, pendingTransfers: 0 } })),
-                    axios.get("/api/v1/activity?limit=3").catch(() => ({ data: { logs: [] } }))
+                    api.get("/api/v1/stats"),
+                    api.get("/api/v1/activity?limit=5"),
                 ]);
                 setStats(statsRes.data);
                 setRecentActivity(activityRes.data.logs || []);
@@ -164,7 +185,7 @@ export default function DashboardPage() {
                     </div>
 
                     {/* HEAD OFFICER ONLY: View Box Keys */}
-                    {user?.role === "head_officer" && storedKeys && (
+                    {can("create_crime_box") && storedKeys && (
                         <ViewBoxKeys keys={storedKeys} />
                     )}
                 </div>
@@ -181,15 +202,15 @@ export default function DashboardPage() {
                 <p className="text-muted-foreground">
                     Join a Crime Box to access evidence or create a new one.
                 </p>
-                <div className="mt-2 inline-flex items-center rounded-full border border-border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground capitalize">
-                    Role: {user?.role?.replace("_", " ")}
+                <div className="mt-2 inline-flex items-center rounded-full border border-border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground">
+                    Role: {user?.roleDisplayName ?? user?.role?.replace(/_/g, " ")}
                 </div>
             </div>
 
             <div className="grid gap-8 md:grid-cols-2">
                 {/* Left Column: Actions */}
                 <div className="space-y-6">
-                    {user?.role === "head_officer" && (
+                    {can("create_crime_box") && (
                         <CreateCrimeBox onCreateSuccess={() => router.push(`/dashboard/${userId}/evidence`)} />
                     )}
                     <JoinCrimeBox onJoinSuccess={() => router.push(`/dashboard/${userId}/evidence`)} />
@@ -198,19 +219,72 @@ export default function DashboardPage() {
                 {/* Right Column: Stats & Overview */}
                 <div className="space-y-6">
                     <div className="grid gap-6 sm:grid-cols-2">
-                        <div className="p-6 rounded-xl bg-card border border-border shadow-sm">
+                        <Link href={`/dashboard/${userId}/custody`} className="p-6 rounded-xl bg-card border border-border shadow-sm hover:border-primary/30 transition-colors">
                             <h3 className="font-medium text-foreground">Pending Transfers</h3>
                             <p className="text-3xl font-bold text-primary mt-2">
                                 {loading ? "..." : stats.pendingTransfers}
                             </p>
-                            <p className="text-xs text-muted-foreground mt-1">Requiring action</p>
-                        </div>
-                        <div className="p-6 rounded-xl bg-card border border-border shadow-sm">
+                            <p className="text-xs text-muted-foreground mt-1">Waiting for you to accept</p>
+                        </Link>
+                        <Link href={`/dashboard/${userId}/evidence`} className="p-6 rounded-xl bg-card border border-border shadow-sm hover:border-primary/30 transition-colors">
                             <h3 className="font-medium text-foreground">Total Evidence</h3>
                             <p className="text-3xl font-bold text-secondary mt-2">
                                 {loading ? "..." : stats.totalEvidence}
                             </p>
-                            <p className="text-xs text-muted-foreground mt-1">System-wide</p>
+                            <p className="text-xs text-muted-foreground mt-1">Visible to you</p>
+                        </Link>
+                        <Link href={`/dashboard/${userId}/cases`} className="p-6 rounded-xl bg-card border border-border shadow-sm hover:border-primary/30 transition-colors">
+                            <h3 className="font-medium text-foreground">Cases</h3>
+                            <p className="text-3xl font-bold text-blue-400 mt-2">
+                                {loading ? "..." : stats.totalCases}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1">Created by or assigned to you</p>
+                        </Link>
+                        <Link href={`/dashboard/${userId}/notifications`} className="p-6 rounded-xl bg-card border border-border shadow-sm hover:border-primary/30 transition-colors">
+                            <h3 className="font-medium text-foreground">Unread Notifications</h3>
+                            <p className="text-3xl font-bold text-purple-400 mt-2">
+                                {loading ? "..." : stats.unreadNotifications}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1">Transfers, disposals, assignments</p>
+                        </Link>
+                        {canAny("approve_disposal", "request_disposal") && (
+                            <Link href={`/dashboard/${userId}/disposals`} className="p-6 rounded-xl bg-card border border-border shadow-sm hover:border-primary/30 transition-colors">
+                                <h3 className="font-medium text-foreground">Pending Disposals</h3>
+                                <p className="text-3xl font-bold text-red-400 mt-2">
+                                    {loading ? "..." : stats.pendingDisposals}
+                                </p>
+                                <p className="text-xs text-muted-foreground mt-1">{can("approve_disposal") ? "Awaiting your decision" : "Awaiting a judge"}</p>
+                            </Link>
+                        )}
+                    </div>
+
+                    {/* Quick Actions */}
+                    <div className="rounded-lg border border-border bg-card p-6">
+                        <h3 className="font-medium text-foreground mb-4">Quick Actions</h3>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                            {can("register_evidence") && (
+                                <Link href={`/dashboard/${userId}/evidence/new`} className="flex items-center gap-2 rounded-md border border-border px-4 py-3 text-sm hover:bg-muted transition-colors">
+                                    <FilePlus className="h-4 w-4 text-primary" /> Register Evidence
+                                </Link>
+                            )}
+                            {canAny("create_cases", "register_evidence") && (
+                                <Link href={`/dashboard/${userId}/cases?new=1`} className="flex items-center gap-2 rounded-md border border-border px-4 py-3 text-sm hover:bg-muted transition-colors">
+                                    <FolderPlus className="h-4 w-4 text-primary" /> New Case
+                                </Link>
+                            )}
+                            <Link href={`/dashboard/${userId}/custody`} className="flex items-center gap-2 rounded-md border border-border px-4 py-3 text-sm hover:bg-muted transition-colors">
+                                <ArrowRightLeft className="h-4 w-4 text-primary" /> Custody Transfers
+                            </Link>
+                            {can("approve_disposal") && (
+                                <Link href={`/dashboard/${userId}/disposals`} className="flex items-center gap-2 rounded-md border border-border px-4 py-3 text-sm hover:bg-muted transition-colors">
+                                    <Trash2 className="h-4 w-4 text-primary" /> Review Disposals
+                                </Link>
+                            )}
+                            {can("view_audit_log") && (
+                                <Link href={`/dashboard/${userId}/audit-log`} className="flex items-center gap-2 rounded-md border border-border px-4 py-3 text-sm hover:bg-muted transition-colors">
+                                    <ScrollText className="h-4 w-4 text-primary" /> Audit Log
+                                </Link>
+                            )}
                         </div>
                     </div>
 
@@ -221,7 +295,7 @@ export default function DashboardPage() {
                             {recentActivity.length === 0 && !loading ? (
                                 <p className="text-sm text-muted-foreground italic">No recent activity.</p>
                             ) : (
-                                recentActivity.map((log: any) => (
+                                recentActivity.map((log) => (
                                     <div key={log.id} className="flex items-start gap-3 text-sm">
                                         <div className="mt-0.5 h-2 w-2 rounded-full bg-muted-foreground/50" />
                                         <p className="text-muted-foreground">

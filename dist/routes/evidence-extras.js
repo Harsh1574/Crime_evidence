@@ -8,6 +8,7 @@
 import { Router } from "express";
 import { authenticate, prisma } from "../middleware/auth.js";
 import { sendError } from "../utils/http.js";
+import { hasPermission } from "../utils/config.js";
 import { recordEvidenceChange, TERMINAL_STATUSES } from "../services/evidence.js";
 import { DISPOSAL_INCLUDE, requestDisposal, reviewDisposal } from "../services/disposal.js";
 import { logActivity, notifyPermissionHolders, notifyUsers } from "../services/notifications.js";
@@ -178,6 +179,23 @@ router.put("/requests/:requestId", authenticate, async (req, res) => {
         const { status, reviewNotes } = req.body;
         if (!["approved", "denied"].includes(status)) {
             res.status(400).json({ error: "status must be approved or denied" });
+            return;
+        }
+        if (!hasPermission(req.user.role, "approve_access") && !hasPermission(req.user.role, "user_management")) {
+            res.status(403).json({ error: "Only custodians or administrators can review access requests." });
+            return;
+        }
+        const pending = await prisma.evidenceAccessRequest.findUnique({ where: { id: req.params.requestId } });
+        if (!pending) {
+            res.status(404).json({ error: "Access request not found" });
+            return;
+        }
+        if (pending.requesterId === req.user.id) {
+            res.status(403).json({ error: "You cannot review your own access request." });
+            return;
+        }
+        if (pending.status !== "pending") {
+            res.status(409).json({ error: `Request already ${pending.status}` });
             return;
         }
         const updated = await prisma.evidenceAccessRequest.update({

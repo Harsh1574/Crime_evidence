@@ -12,6 +12,9 @@ import {
     getJwtSecret,
     getSessionTimeout,
     normalizeRoleName,
+    findRole,
+    getPermissions,
+    isReadOnlyRole,
 } from "../utils/config.js";
 import { audit } from "../services/audit.js";
 import { seedDemoUsers } from "../services/seed.js";
@@ -136,6 +139,9 @@ router.post("/login", async (req: Request, res: Response) => {
                 fullName: user.fullName,
                 role: user.role,
                 department: user.department,
+                roleDisplayName: findRole(user.role)?.display_name ?? user.role,
+                permissions: getPermissions(user.role),
+                readOnly: isReadOnlyRole(user.role),
             },
         });
     } catch (err: any) {
@@ -192,7 +198,14 @@ router.get("/me", authenticate, async (req: Request, res: Response) => {
             return;
         }
 
-        res.json({ user });
+        res.json({
+            user: {
+                ...user,
+                roleDisplayName: findRole(user.role)?.display_name ?? user.role,
+                permissions: getPermissions(user.role),
+                readOnly: isReadOnlyRole(user.role),
+            },
+        });
     } catch (err: any) {
         res.status(500).json({ error: "Failed to fetch profile", details: err.message });
     }

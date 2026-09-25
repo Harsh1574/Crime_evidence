@@ -16,7 +16,10 @@ import {
     BarChart2,
     Bell,
     Rss,
+    Trash2,
+    ScrollText,
 } from "lucide-react";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { FingerprintLogo } from "@/components/ui/FingerprintLogo";
 
@@ -25,12 +28,29 @@ export default function DashboardLayout({
 }: {
     children: React.ReactNode;
 }) {
-    const { user, isAuthenticated, isLoading, logout } = useAuth();
+    const { user, isAuthenticated, isLoading, logout, canAny, can } = useAuth();
     const router = useRouter();
     const pathname = usePathname();
     const params = useParams();
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [unread, setUnread] = useState(0);
+    const [signingOut, setSigningOut] = useState(false);
     const userId = params.userId as string;
+
+    // Unread notification badge — refreshed on navigation and every 30 seconds
+    useEffect(() => {
+        if (!isAuthenticated) return;
+        const load = () => api.get("/api/v1/notifications").then((r) => setUnread(r.data.unreadCount ?? 0)).catch(() => undefined);
+        load();
+        const timer = setInterval(load, 30000);
+        return () => clearInterval(timer);
+    }, [isAuthenticated, pathname]);
+
+    const handleSignOut = async () => {
+        setSigningOut(true);
+        await logout();
+        setSigningOut(false);
+    };
 
     useEffect(() => {
         if (!isLoading && !isAuthenticated) {
@@ -55,8 +75,14 @@ export default function DashboardLayout({
         { name: "Chain of Custody", href: `/dashboard/${userId}/custody`, icon: Activity },
         { name: "Analytics", href: `/dashboard/${userId}/analytics`, icon: BarChart2 },
         { name: "Activity Feed", href: `/dashboard/${userId}/activity`, icon: Rss },
-        { name: "Notifications", href: `/dashboard/${userId}/notifications`, icon: Bell },
-    ];
+        { name: "Notifications", href: `/dashboard/${userId}/notifications`, icon: Bell, badge: unread },
+        ...(canAny("approve_disposal", "request_disposal", "view_all_evidence")
+            ? [{ name: "Disposals", href: `/dashboard/${userId}/disposals`, icon: Trash2 }]
+            : []),
+        ...(can("view_audit_log")
+            ? [{ name: "Audit Log", href: `/dashboard/${userId}/audit-log`, icon: ScrollText }]
+            : []),
+    ] as { name: string; href: string; icon: typeof LayoutDashboard; badge?: number }[];
 
     return (
         <div className="flex h-screen overflow-hidden bg-background">
@@ -109,6 +135,11 @@ export default function DashboardLayout({
                                     )}
                                 />
                                 {item.name}
+                                {!!item.badge && (
+                                    <span className="ml-auto rounded-full bg-primary px-2 py-0.5 text-xs font-bold text-primary-foreground">
+                                        {item.badge}
+                                    </span>
+                                )}
                             </Link>
                         );
                     })}
@@ -123,16 +154,17 @@ export default function DashboardLayout({
                             </div>
                             <div className="overflow-hidden">
                                 <p className="truncate text-sm font-medium text-foreground">{user?.fullName}</p>
-                                <p className="truncate text-xs text-muted-foreground capitalize">{user?.role}</p>
+                                <p className="truncate text-xs text-muted-foreground">{user?.roleDisplayName ?? user?.role}</p>
                             </div>
                         </div>
                     </div>
                     <button
-                        onClick={logout}
-                        className="flex w-full items-center gap-3 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
+                        onClick={handleSignOut}
+                        disabled={signingOut}
+                        className="flex w-full items-center gap-3 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 rounded-lg transition-colors disabled:opacity-50"
                     >
                         <LogOut className="h-4 w-4" />
-                        Sign Out
+                        {signingOut ? "Signing out..." : "Sign Out"}
                     </button>
                 </div>
             </aside>
@@ -150,9 +182,22 @@ export default function DashboardLayout({
                         <span className="text-sm text-muted-foreground hidden sm:inline-block">
                             {user?.fullName}
                         </span>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 capitalize">
-                            {user?.role?.replace('_', ' ')}
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                            {user?.roleDisplayName ?? user?.role?.replace(/_/g, " ")}
                         </span>
+                        {user?.readOnly && (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                Read-only
+                            </span>
+                        )}
+                        <Link href={`/dashboard/${userId}/notifications`} className="relative p-2 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground">
+                            <Bell className="h-5 w-5" />
+                            {unread > 0 && (
+                                <span className="absolute -top-0.5 -right-0.5 min-w-[18px] rounded-full bg-primary px-1 text-center text-[10px] font-bold text-primary-foreground">
+                                    {unread}
+                                </span>
+                            )}
+                        </Link>
                     </div>
                 </header>
 

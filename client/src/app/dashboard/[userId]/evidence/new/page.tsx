@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import axios from "axios";
-import { useRouter, useParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { api, apiError } from "@/lib/api";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { ArrowLeft, Save, Loader2, UploadCloud } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ import { useCrimeBox } from "@/context/CrimeBoxContext";
 export default function NewEvidencePage() {
     const router = useRouter();
     const params = useParams();
+    const searchParams = useSearchParams();
     const { permission, activeBox } = useCrimeBox();
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
@@ -19,9 +20,17 @@ export default function NewEvidencePage() {
     // ... permission check ...
 
     const [files, setFiles] = useState<FileList | null>(null);
+    const [cases, setCases] = useState<{ id: string; caseNumber?: string | null; title: string }[]>([]);
+
+    // Cases the user can file evidence under (suggestions when no Crime Box is active)
+    useEffect(() => {
+        if (activeBox) return;
+        api.get("/api/v1/cases").then((r) => setCases(r.data)).catch(() => undefined);
+    }, [activeBox]);
 
     const [formData, setFormData] = useState({
-        caseId: activeBox?.caseId || "", // Pre-fill from active box
+        caseId: activeBox?.caseId || searchParams.get("caseId") || "", // Pre-fill from active box or ?caseId=
+        evidenceId: "",
         type: "Physical",
         description: "",
         collectionDate: new Date().toISOString().split("T")[0],
@@ -47,6 +56,7 @@ export default function NewEvidencePage() {
         try {
             const data = new FormData();
             data.append("caseId", formData.caseId);
+            if (formData.evidenceId.trim()) data.append("evidenceId", formData.evidenceId.trim());
             data.append("type", formData.type);
             data.append("description", formData.description);
             data.append("collectionDate", new Date(formData.collectionDate).toISOString());
@@ -59,15 +69,18 @@ export default function NewEvidencePage() {
                 }
             }
 
-            const response = await axios.post("/api/v1/evidence", data, {
+            const response = await api.post("/api/v1/evidence", data, {
                 headers: { "Content-Type": "multipart/form-data" },
             });
 
             if (response.data.success) {
-                router.push(`/dashboard/${userId}/evidence`);
+                if (response.data.anchoring?.anchorStatus === "FAILED") {
+                    alert(`Evidence saved, but anchoring to IPFS/ledger failed: ${response.data.anchoring.error}. You can retry from the evidence page.`);
+                }
+                router.push(`/dashboard/${userId}/evidence/${response.data.evidence.id}`);
             }
-        } catch (err: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
-            setError(err.response?.data?.error || "Failed to register evidence.");
+        } catch (err) {
+            setError(apiError(err, "Failed to register evidence."));
         } finally {
             setLoading(false);
         }
@@ -107,6 +120,28 @@ export default function NewEvidencePage() {
                                 value={formData.caseId}
                                 onChange={handleChange}
                                 readOnly={!!activeBox}
+                                list="case-options"
+                            />
+                            <datalist id="case-options">
+                                {cases.map((c) => (
+                                    <option key={c.id} value={c.caseNumber ?? c.id}>{c.title}</option>
+                                ))}
+                            </datalist>
+                            {!activeBox && cases.length > 0 && (
+                                <p className="text-xs text-muted-foreground">Pick one of your cases to attach this item to it.</p>
+                            )}
+                        </div>
+
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium leading-none">
+                                Evidence ID <span className="text-xs text-muted-foreground">(optional — auto-generated)</span>
+                            </label>
+                            <input
+                                name="evidenceId"
+                                placeholder="EVID_2026_001"
+                                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                value={formData.evidenceId}
+                                onChange={handleChange}
                             />
                         </div>
 
@@ -185,7 +220,7 @@ export default function NewEvidencePage() {
                             <UploadCloud className="h-5 w-5 text-muted-foreground" />
                         </div>
                         <p className="text-xs text-muted-foreground">
-                            Supported: Images, PDF, Text. Max size: 5MB per file.
+                            Each file is SHA-256 hashed and stored on IPFS; its hash is anchored on the ledger.
                         </p>
                     </div>
 

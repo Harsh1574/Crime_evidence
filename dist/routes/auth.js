@@ -6,7 +6,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 import { authenticate, prisma } from "../middleware/auth.js";
-import { getValidRoleNames, getJwtSecret, getSessionTimeout, normalizeRoleName, } from "../utils/config.js";
+import { getValidRoleNames, getJwtSecret, getSessionTimeout, normalizeRoleName, findRole, getPermissions, isReadOnlyRole, } from "../utils/config.js";
 import { audit } from "../services/audit.js";
 import { seedDemoUsers } from "../services/seed.js";
 const router = Router();
@@ -109,6 +109,9 @@ router.post("/login", async (req, res) => {
                 fullName: user.fullName,
                 role: user.role,
                 department: user.department,
+                roleDisplayName: findRole(user.role)?.display_name ?? user.role,
+                permissions: getPermissions(user.role),
+                readOnly: isReadOnlyRole(user.role),
             },
         });
     }
@@ -161,7 +164,14 @@ router.get("/me", authenticate, async (req, res) => {
             res.status(404).json({ error: "User not found." });
             return;
         }
-        res.json({ user });
+        res.json({
+            user: {
+                ...user,
+                roleDisplayName: findRole(user.role)?.display_name ?? user.role,
+                permissions: getPermissions(user.role),
+                readOnly: isReadOnlyRole(user.role),
+            },
+        });
     }
     catch (err) {
         res.status(500).json({ error: "Failed to fetch profile", details: err.message });
