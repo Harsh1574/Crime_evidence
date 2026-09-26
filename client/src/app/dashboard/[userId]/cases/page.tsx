@@ -50,7 +50,7 @@ export default function CasesPage() {
     if (!token) return;
     api.get("/api/v1/cases")
       .then(r => setCases(r.data))
-      .catch(console.error)
+      .catch(console.warn)
       .finally(() => setLoading(false));
   }, [token]);
 

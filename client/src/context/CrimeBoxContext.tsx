@@ -71,7 +71,6 @@ export function CrimeBoxProvider({ children }: { children: React.ReactNode }) {
       }
       return null;
     } catch (error) {
-      console.error("Failed to create box:", error);
       toast.error(apiError(error, "Failed to create Crime Box. Case ID might already exist."));
       return null;
     }
@@ -94,7 +93,6 @@ export function CrimeBoxProvider({ children }: { children: React.ReactNode }) {
       }
       return false;
     } catch (error) {
-      console.error("Failed to join box:", error);
       toast.error(apiError(error, "Failed to join Crime Box."));
       return false;
     }

@@ -86,7 +86,7 @@ export default function EvidenceListPage() {
             setEvidence(response.data.evidence);
             setPagination((p) => ({ ...p, totalPages: Math.max(1, response.data.pagination.totalPages), total: response.data.pagination.total }));
         } catch (error) {
-            console.error("Failed to fetch evidence:", error);
+            console.warn("Failed to fetch evidence:", error);
         } finally {
             setLoading(false);
         }

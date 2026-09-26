@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { authenticate, requirePermission, prisma } from "../middleware/auth.js";
 import crypto from "crypto";
+import { hasPermission } from "../utils/config.js";
 
 const router = Router();
 
@@ -93,9 +94,11 @@ router.post("/join", authenticate, async (req: Request, res: Response) => {
     let permission = "read-only";
 
     if (isPrivate) {
-      if (userRole !== "officer" && userRole !== "head_officer" && userRole !== "admin") {
+      // Read-write access is for roles that can register evidence
+      // (officer, head officer, collector, admin). Everyone else must use the public key.
+      if (!hasPermission(userRole, "register_evidence")) {
         res.status(403).json({
-          error: "Access Denied. Only Officers and Admins can use Private Keys.",
+          error: "This role cannot use the private key. Join with the public key for read-only access.",
         });
         return;
       }

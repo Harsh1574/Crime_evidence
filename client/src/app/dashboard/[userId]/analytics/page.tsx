@@ -48,7 +48,7 @@ export default function AnalyticsPage() {
     if (!token) return;
     api.get("/api/v1/stats")
       .then(r => setStats(r.data))
-      .catch(console.error)
+      .catch(console.warn)
       .finally(() => setLoading(false));
   }, [token]);
 

@@ -33,7 +33,7 @@ export default function CustodyDashboardPage() {
             setIncoming(response.data.incoming);
             setOutgoing(response.data.outgoing);
         } catch (err) {
-            console.error("Failed to fetch transfers", err);
+            console.warn("Failed to fetch transfers", err);
         } finally {
             setLoading(false);
         }

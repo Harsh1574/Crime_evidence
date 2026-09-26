@@ -81,8 +81,10 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
         req.user = { id: user.id, username: user.username, role: user.role };
         req.tokenInfo = { jti: decoded.jti, exp: decoded.exp };
 
-        const isLogout = req.originalUrl.split("?")[0].endsWith("/auth/logout");
-        if (WRITE_METHODS.has(req.method) && !isLogout && isReadOnlyRole(user.role)) {
+        // Logout and joining a Crime Box change nothing, so read-only roles may use them
+        const pathOnly = req.originalUrl.split("?")[0];
+        const readOnlySafe = pathOnly.endsWith("/auth/logout") || pathOnly.endsWith("/boxes/join");
+        if (WRITE_METHODS.has(req.method) && !readOnlySafe && isReadOnlyRole(user.role)) {
             res.status(403).json({
                 error: "Your role has read-only access. Write actions are not permitted.",
                 your_role: findRole(user.role)?.display_name ?? user.role,

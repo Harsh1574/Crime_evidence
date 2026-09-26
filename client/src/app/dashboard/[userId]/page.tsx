@@ -110,7 +110,7 @@ export default function DashboardPage() {
                 setStats(statsRes.data);
                 setRecentActivity(activityRes.data.logs || []);
             } catch (error) {
-                console.error("Failed to fetch dashboard data", error);
+                console.warn("Failed to fetch dashboard data", error);
             } finally {
                 setLoading(false);
             }

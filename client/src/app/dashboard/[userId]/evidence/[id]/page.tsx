@@ -699,7 +699,7 @@ function VersionHistoryPanel({ evidenceId, refreshKey }: { evidenceId: string; r
     useEffect(() => {
         api.get(`/api/v1/evidence/${evidenceId}/versions`)
             .then((r) => setVersions(r.data.versions))
-            .catch(console.error)
+            .catch(console.warn)
             .finally(() => setLoading(false));
     }, [evidenceId, refreshKey]);
 
@@ -866,7 +866,7 @@ function RetentionPanel({ evidenceId, refreshKey, canEdit }: { evidenceId: strin
     const [saving, setSaving] = useState(false);
 
     const load = useCallback(() => {
-        api.get(`/api/v1/evidence/${evidenceId}/retention-status`).then((r) => setStatus(r.data)).catch(console.error);
+        api.get(`/api/v1/evidence/${evidenceId}/retention-status`).then((r) => setStatus(r.data)).catch(console.warn);
     }, [evidenceId]);
 
     useEffect(() => { load(); }, [load, refreshKey]);
@@ -948,7 +948,7 @@ function DisposalPanel({ evidenceId, refreshKey, onChanged }: { evidenceId: stri
     const [busy, setBusy] = useState<string | null>(null);
 
     const load = useCallback(() => {
-        api.get(`/api/v1/evidence/${evidenceId}/disposal-requests`).then((r) => setRequests(r.data)).catch(console.error);
+        api.get(`/api/v1/evidence/${evidenceId}/disposal-requests`).then((r) => setRequests(r.data)).catch(console.warn);
     }, [evidenceId]);
 
     useEffect(() => { load(); }, [load, refreshKey]);
@@ -1032,7 +1032,7 @@ function CommentsPanel({ evidenceId }: { evidenceId: string }) {
 
     useEffect(() => {
         api.get(`/api/v1/evidence/${evidenceId}/comments`)
-            .then(r => setComments(r.data)).catch(console.error).finally(() => setLoading(false));
+            .then(r => setComments(r.data)).catch(console.warn).finally(() => setLoading(false));
     }, [evidenceId]);
 
     const post = async () => {
@@ -1129,7 +1129,7 @@ function LabResultsPanel({ evidenceId }: { evidenceId: string }) {
 
     useEffect(() => {
         api.get(`/api/v1/evidence/${evidenceId}/lab-results`)
-            .then(r => setResults(r.data)).catch(console.error).finally(() => setLoading(false));
+            .then(r => setResults(r.data)).catch(console.warn).finally(() => setLoading(false));
     }, [evidenceId]);
 
     const submit = async () => {
@@ -1212,7 +1212,7 @@ function AccessRequestPanel({ evidenceId }: { evidenceId: string }) {
 
     const load = useCallback(() => {
         api.get(`/api/v1/evidence/${evidenceId}/requests`)
-            .then(r => setRequests(r.data)).catch(console.error).finally(() => setLoading(false));
+            .then(r => setRequests(r.data)).catch(console.warn).finally(() => setLoading(false));
     }, [evidenceId]);
 
     useEffect(() => { load(); }, [load]);

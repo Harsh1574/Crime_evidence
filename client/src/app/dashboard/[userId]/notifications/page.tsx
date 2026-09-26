@@ -56,7 +56,7 @@ export default function NotificationsPage() {
     try {
       const r = await api.get("/api/v1/notifications");
       setNotifications(r.data.notifications || []);
-    } catch (e) { console.error(e); }
+    } catch (e) { console.warn(e); }
     finally { setLoading(false); }
   }, [token]);
 
@@ -76,7 +76,7 @@ export default function NotificationsPage() {
     try {
       await api.put(`/api/v1/notifications/${id}/read`);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-    } catch (e) { console.error(e); }
+    } catch (e) { console.warn(e); }
   };
 
   const unread = notifications.filter(n => !n.read).length;

@@ -66,7 +66,7 @@ export default function ActivityFeedPage() {
       setLogs(r.data.logs || []);
       setTotalPages(r.data.totalPages || 1);
       setPage(p);
-    } catch (e) { console.error(e); }
+    } catch (e) { console.warn(e); }
     finally { setLoading(false); }
   }, [token, mine]);
 
