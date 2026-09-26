@@ -41,6 +41,7 @@ import {
     UserSummary,
 } from "@/lib/api";
 import { Modal, inputClass, textareaClass, primaryBtn, secondaryBtn, dangerBtn } from "@/components/ui/Modal";
+import { useToast } from "@/components/ui/Toast";
 
 interface EvidenceFile {
     id: string;
@@ -103,6 +104,7 @@ export default function EvidenceDetailPage() {
     const id = params.id as string;
     const userId = params.userId as string;
     const { user, can } = useAuth();
+    const toast = useToast();
 
     const [evidence, setEvidence] = useState<EvidenceDetail | null>(null);
     const [loading, setLoading] = useState(true);
@@ -163,7 +165,7 @@ export default function EvidenceDetailPage() {
         try {
             await fn();
         } catch (e) {
-            alert(apiError(e));
+            toast.error(apiError(e));
         } finally {
             setBusy(null);
         }
@@ -175,7 +177,7 @@ export default function EvidenceDetailPage() {
         setTransferReason("");
         setTargetUserId("");
         await refreshAll();
-        alert("Transfer requested. The recipient must accept it on their Chain of Custody page.");
+        toast.success("The recipient must accept it on their Chain of Custody page.", "Transfer requested");
     });
 
     const handleStatus = () => run("status", async () => {
@@ -183,12 +185,14 @@ export default function EvidenceDetailPage() {
         setModal(null);
         setStatusNotes("");
         await refreshAll();
+        toast.success(`Status changed to ${newStatus}. New version anchored on the ledger.`);
     });
 
     const handleEdit = () => run("edit", async () => {
         await api.put(`/api/v1/evidence/${id}`, editForm);
         setModal(null);
         await refreshAll();
+        toast.success("Details saved. New version anchored on the ledger.");
     });
 
     const handleDisposalRequest = () => run("disposal", async () => {
@@ -196,40 +200,55 @@ export default function EvidenceDetailPage() {
         setModal(null);
         setDisposalReason("");
         await refreshAll();
-        alert("Disposal requested. A judge must approve it.");
+        toast.success("A judge must approve it before the evidence is disposed.", "Disposal requested");
     });
 
     const handleVerify = () => run("verify", async () => {
         const r = await api.post(`/api/v1/evidence/${id}/verify`, {});
         setIntegrity(r.data.integrity);
         setModal("verify");
+        const status = r.data.integrity.status;
+        if (status === "VERIFIED") toast.success("All integrity checks passed.", "VERIFIED");
+        else if (status === "TAMPERED") toast.error("At least one integrity check failed.", "TAMPERED");
+        else toast.warning("IPFS or the ledger could not be reached.", "UNVERIFIABLE");
     });
 
     const handleDownload = (fileId?: string) => run(fileId ? `file-${fileId}` : "download", async () => {
         const url = fileId ? `/api/v1/evidence/${id}/files/${fileId}/download` : `/api/v1/evidence/${id}/download`;
         const info = await downloadFile(url, "evidence-file");
-        if (info.integrity === "TAMPERED") alert("Warning: the downloaded file no longer matches its recorded SHA-256 hash.");
+        if (info.integrity === "TAMPERED") toast.error("The downloaded file no longer matches its recorded SHA-256 hash.", "Integrity warning");
+        else toast.success("File downloaded. SHA-256 matches the recorded hash.");
     });
 
     const handleReport = () => run("report", async () => {
         await downloadFile(`/api/v1/evidence/${id}/report`, `evidence-report-${evidence?.evidenceNumber ?? id}.pdf`);
+        toast.success("PDF report downloaded.");
     });
 
     const handleReceipt = () => run("receipt", async () => {
         const r = await api.get(`/api/v1/evidence/${id}/collection-receipt`);
         saveJson(r.data.receipt, `${r.data.receipt.receiptNumber}.json`);
+        toast.success(`Receipt ${r.data.receipt.receiptNumber} downloaded.`);
     });
 
     const handleReanchor = () => run("anchor", async () => {
         const r = await api.post(`/api/v1/evidence/${id}/anchor`);
         await refreshAll();
-        alert(r.data.success ? "Evidence anchored to IPFS and the ledger." : `Anchoring failed: ${r.data.anchoring?.error}`);
+        if (r.data.success) toast.success("Evidence anchored to IPFS and the ledger.");
+        else toast.error(r.data.anchoring?.error ?? "Unknown error", "Anchoring failed");
     });
 
-    const handleDelete = () => {
-        if (!confirm("Delete this evidence? The ledger keeps its history, but the record and files are removed from the system.")) return;
+    const handleDelete = async () => {
+        const ok = await toast.confirm({
+            title: "Delete this evidence?",
+            message: "The ledger keeps its history, but the record and files are removed from the system.",
+            confirmLabel: "Delete",
+            danger: true,
+        });
+        if (!ok) return;
         run("delete", async () => {
             await api.delete(`/api/v1/evidence/${id}`);
+            toast.success("Evidence deleted. A DeleteAsset transaction was added to the ledger.");
             router.push(`/dashboard/${userId}/evidence`);
         });
     };
@@ -729,6 +748,7 @@ interface LedgerRecord {
 }
 
 function LedgerPanel({ evidenceRef, refreshKey }: { evidenceRef: string; refreshKey: number }) {
+    const toast = useToast();
     const [record, setRecord] = useState<LedgerRecord | null>(null);
     const [loading, setLoading] = useState(false);
     const [open, setOpen] = useState(false);
@@ -739,11 +759,11 @@ function LedgerPanel({ evidenceRef, refreshKey }: { evidenceRef: string; refresh
             const r = await api.get(`/api/evidence/${encodeURIComponent(evidenceRef)}`);
             setRecord(r.data);
         } catch (e) {
-            alert(apiError(e, "Failed to read ledger record"));
+            toast.error(apiError(e, "Failed to read ledger record"));
         } finally {
             setLoading(false);
         }
-    }, [evidenceRef]);
+    }, [evidenceRef, toast]);
 
     useEffect(() => {
         if (open) load();
@@ -789,6 +809,7 @@ function LedgerPanel({ evidenceRef, refreshKey }: { evidenceRef: string; refresh
 
 // ─── QR Code Panel ────────────────────────────────────────────────
 function QRPanel({ evidenceId }: { evidenceId: string }) {
+    const toast = useToast();
     const [qrData, setQrData] = useState<{ qrDataUrl: string; verifyUrl: string } | null>(null);
     const [loading, setLoading] = useState(false);
 
@@ -797,7 +818,7 @@ function QRPanel({ evidenceId }: { evidenceId: string }) {
         try {
             const r = await api.get(`/api/v1/evidence/${evidenceId}/qr`);
             setQrData(r.data);
-        } catch (e) { alert(apiError(e, "Failed to generate QR code")); }
+        } catch (e) { toast.error(apiError(e, "Failed to generate QR code")); }
         finally { setLoading(false); }
     };
 
@@ -837,6 +858,7 @@ interface RetentionStatus {
 }
 
 function RetentionPanel({ evidenceId, refreshKey, canEdit }: { evidenceId: string; refreshKey: number; canEdit: boolean }) {
+    const toast = useToast();
     const [status, setStatus] = useState<RetentionStatus | null>(null);
     const [editing, setEditing] = useState(false);
     const [deadline, setDeadline] = useState("");
@@ -858,7 +880,8 @@ function RetentionPanel({ evidenceId, refreshKey, canEdit }: { evidenceId: strin
             });
             setEditing(false);
             load();
-        } catch (e) { alert(apiError(e, "Failed to update retention")); }
+            toast.success("Retention updated.");
+        } catch (e) { toast.error(apiError(e, "Failed to update retention")); }
         finally { setSaving(false); }
     };
 
@@ -919,6 +942,7 @@ interface DisposalRequest {
 
 function DisposalPanel({ evidenceId, refreshKey, onChanged }: { evidenceId: string; refreshKey: number; onChanged: () => Promise<void> }) {
     const { can } = useAuth();
+    const toast = useToast();
     const [requests, setRequests] = useState<DisposalRequest[]>([]);
     const [notes, setNotes] = useState<Record<string, string>>({});
     const [busy, setBusy] = useState<string | null>(null);
@@ -935,7 +959,9 @@ function DisposalPanel({ evidenceId, refreshKey, onChanged }: { evidenceId: stri
             await api.post(`/api/v1/disposals/${requestId}/${decision}`, { note: notes[requestId] ?? "" });
             load();
             await onChanged();
-        } catch (e) { alert(apiError(e)); }
+            if (decision === "approve") toast.success("Evidence is now DISPOSED. A certificate was issued.", "Disposal approved");
+            else toast.info("The evidence status is unchanged.", "Disposal rejected");
+        } catch (e) { toast.error(apiError(e)); }
         finally { setBusy(null); }
     };
 
@@ -998,6 +1024,7 @@ interface Comment {
 
 function CommentsPanel({ evidenceId }: { evidenceId: string }) {
     const { user } = useAuth();
+    const toast = useToast();
     const [comments, setComments] = useState<Comment[]>([]);
     const [loading, setLoading] = useState(true);
     const [content, setContent] = useState("");
@@ -1015,16 +1042,18 @@ function CommentsPanel({ evidenceId }: { evidenceId: string }) {
             const r = await api.post(`/api/v1/evidence/${evidenceId}/comments`, { content });
             setComments(prev => [...prev, r.data]);
             setContent("");
-        } catch (e) { alert(apiError(e, "Failed to post comment")); }
+            toast.success("Comment posted.");
+        } catch (e) { toast.error(apiError(e, "Failed to post comment")); }
         finally { setPosting(false); }
     };
 
     const remove = async (commentId: string) => {
-        if (!confirm("Delete this comment?")) return;
+        if (!(await toast.confirm({ title: "Delete this comment?", confirmLabel: "Delete", danger: true }))) return;
         try {
             await api.delete(`/api/v1/evidence/${evidenceId}/comments/${commentId}`);
             setComments(prev => prev.filter(c => c.id !== commentId));
-        } catch (e) { alert(apiError(e, "Failed to delete comment")); }
+            toast.success("Comment deleted.");
+        } catch (e) { toast.error(apiError(e, "Failed to delete comment")); }
     };
 
     const canModerate = user?.role === "admin" || user?.role === "head_officer";
@@ -1091,6 +1120,7 @@ interface LabResult {
 
 function LabResultsPanel({ evidenceId }: { evidenceId: string }) {
     const { user } = useAuth();
+    const toast = useToast();
     const [results, setResults] = useState<LabResult[]>([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
@@ -1110,7 +1140,8 @@ function LabResultsPanel({ evidenceId }: { evidenceId: string }) {
             setResults(prev => [r.data, ...prev]);
             setShowForm(false);
             setForm({ title: "", summary: "", findings: "" });
-        } catch (e) { alert(apiError(e, "Failed to submit lab result")); }
+            toast.success("Lab result submitted.");
+        } catch (e) { toast.error(apiError(e, "Failed to submit lab result")); }
         finally { setPosting(false); }
     };
 
@@ -1171,6 +1202,7 @@ interface AccessRequest {
 
 function AccessRequestPanel({ evidenceId }: { evidenceId: string }) {
     const { user, canAny } = useAuth();
+    const toast = useToast();
     const [requests, setRequests] = useState<AccessRequest[]>([]);
     const [loading, setLoading] = useState(true);
     const [reason, setReason] = useState("");
@@ -1192,8 +1224,9 @@ function AccessRequestPanel({ evidenceId }: { evidenceId: string }) {
             await api.post(`/api/v1/evidence/${evidenceId}/requests`, { reason });
             setReason("");
             load();
+            toast.success("Access request sent. Custodians and admins have been notified.");
         } catch (e) {
-            alert(apiError(e, "Request failed"));
+            toast.error(apiError(e, "Request failed"));
         }
         finally { setPosting(false); }
     };
@@ -1203,7 +1236,8 @@ function AccessRequestPanel({ evidenceId }: { evidenceId: string }) {
         try {
             await api.put(`/api/v1/evidence/${evidenceId}/requests/${requestId}`, { status, reviewNotes: reviewNotes[requestId] || undefined });
             load();
-        } catch (e) { alert(apiError(e, "Review failed")); }
+            toast.success(`Access request ${status}.`);
+        } catch (e) { toast.error(apiError(e, "Review failed")); }
         finally { setReviewing(null); }
     };
 

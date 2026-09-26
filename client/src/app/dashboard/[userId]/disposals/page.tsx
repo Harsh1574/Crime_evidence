@@ -8,6 +8,7 @@ import { useAuth } from "@/context/AuthContext";
 import { api, apiError, saveJson, statusClass } from "@/lib/api";
 import { inputClass, primaryBtn, secondaryBtn, dangerBtn } from "@/components/ui/Modal";
 import LottieLoader from "@/components/ui/LottieLoader";
+import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/utils";
 
 interface DisposalRequest {
@@ -32,6 +33,7 @@ const FILTERS = [
 
 export default function DisposalsPage() {
   const { can } = useAuth();
+  const toast = useToast();
   const params = useParams();
   const userId = params.userId as string;
 
@@ -47,11 +49,11 @@ export default function DisposalsPage() {
       const r = await api.get("/api/v1/disposals", { params: { status: filter || undefined } });
       setRequests(r.data.requests);
     } catch (e) {
-      alert(apiError(e, "Failed to load disposal requests"));
+      toast.error(apiError(e, "Failed to load disposal requests"));
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, [filter, toast]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -60,8 +62,10 @@ export default function DisposalsPage() {
     try {
       await api.post(`/api/v1/disposals/${id}/${decision}`, { note: notes[id] ?? "" });
       await load();
+      if (decision === "approve") toast.success("The evidence is now DISPOSED and a certificate was issued.", "Disposal approved");
+      else toast.info("The evidence status is unchanged.", "Disposal rejected");
     } catch (e) {
-      alert(apiError(e));
+      toast.error(apiError(e));
     } finally {
       setBusy(null);
     }

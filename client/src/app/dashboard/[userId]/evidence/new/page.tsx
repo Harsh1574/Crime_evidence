@@ -7,12 +7,14 @@ import { ArrowLeft, Save, Loader2, UploadCloud } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { useCrimeBox } from "@/context/CrimeBoxContext";
+import { useToast } from "@/components/ui/Toast";
 
 export default function NewEvidencePage() {
     const router = useRouter();
     const params = useParams();
     const searchParams = useSearchParams();
     const { permission, activeBox } = useCrimeBox();
+    const toast = useToast();
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const userId = params.userId as string;
@@ -75,7 +77,9 @@ export default function NewEvidencePage() {
 
             if (response.data.success) {
                 if (response.data.anchoring?.anchorStatus === "FAILED") {
-                    alert(`Evidence saved, but anchoring to IPFS/ledger failed: ${response.data.anchoring.error}. You can retry from the evidence page.`);
+                    toast.warning(`Anchoring to IPFS/ledger failed: ${response.data.anchoring.error}. Use Retry Anchoring on the evidence page.`, "Evidence saved");
+                } else {
+                    toast.success(`${response.data.evidence.evidenceNumber} hashed, stored on IPFS and anchored on the ledger.`, "Evidence registered");
                 }
                 router.push(`/dashboard/${userId}/evidence/${response.data.evidence.id}`);
             }

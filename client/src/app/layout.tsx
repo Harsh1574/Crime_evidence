@@ -3,6 +3,7 @@ import { Space_Grotesk, Inter } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
 import { CrimeBoxProvider } from "@/context/CrimeBoxContext";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const spaceGrotesk = Space_Grotesk({
   variable: "--font-space-grotesk",
@@ -29,9 +30,11 @@ export default function RootLayout({
       <body
         className={`${inter.variable} ${spaceGrotesk.variable} antialiased bg-background text-foreground font-sans`}
       >
-        <AuthProvider>
-          <CrimeBoxProvider>{children}</CrimeBoxProvider>
-        </AuthProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <CrimeBoxProvider>{children}</CrimeBoxProvider>
+          </AuthProvider>
+        </ToastProvider>
       </body>
     </html>
   );

@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { useAuth } from "./AuthContext";
 import { api, apiError } from "@/lib/api";
+import { useToast } from "@/components/ui/Toast";
 
 export type Permission = "read-write" | "read-only" | null;
 
@@ -28,6 +29,7 @@ const CrimeBoxContext = createContext<CrimeBoxContextType | undefined>(undefined
 
 export function CrimeBoxProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
+  const toast = useToast();
   const [activeBox, setActiveBox] = useState<CrimeBox | null>(null);
   const [permission, setPermission] = useState<Permission>(null);
 
@@ -54,6 +56,8 @@ export function CrimeBoxProvider({ children }: { children: React.ReactNode }) {
         sessionStorage.setItem("active_crime_box", JSON.stringify(box));
         sessionStorage.setItem("active_crime_box_perm", "read-write");
 
+        toast.success(`Crime Box "${box.name}" created. Share the keys with your team.`);
+
         // Persist keys separately so Head Officer can view them after joining
         sessionStorage.setItem("active_crime_box_keys", JSON.stringify({
           privateKey: box.privateKey,
@@ -68,7 +72,7 @@ export function CrimeBoxProvider({ children }: { children: React.ReactNode }) {
       return null;
     } catch (error) {
       console.error("Failed to create box:", error);
-      alert(apiError(error, "Failed to create Crime Box. Case ID might already exist."));
+      toast.error(apiError(error, "Failed to create Crime Box. Case ID might already exist."));
       return null;
     }
   };
@@ -85,17 +89,19 @@ export function CrimeBoxProvider({ children }: { children: React.ReactNode }) {
         // Persist session
         sessionStorage.setItem("active_crime_box", JSON.stringify(box));
         sessionStorage.setItem("active_crime_box_perm", perm);
+        toast.success(`Joined "${box.name}" with ${perm} access.`);
         return true;
       }
       return false;
     } catch (error) {
       console.error("Failed to join box:", error);
-      alert(apiError(error, "Failed to join Crime Box."));
+      toast.error(apiError(error, "Failed to join Crime Box."));
       return false;
     }
   };
 
   const leaveBox = () => {
+    if (activeBox) toast.info(`You left "${activeBox.name}".`);
     setActiveBox(null);
     setPermission(null);
     sessionStorage.removeItem("active_crime_box");

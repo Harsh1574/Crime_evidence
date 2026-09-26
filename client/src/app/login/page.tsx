@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { api, apiError } from "@/lib/api";
+import { useToast } from "@/components/ui/Toast";
 import Link from "next/link";
 import { Lock, AlertCircle, Loader2, ShieldCheck, ArrowRight, BadgeCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,6 +24,16 @@ export default function LoginPage() {
     const [loading, setLoading] = useState(false);
     const { login, isAuthenticated, user } = useAuth();
     const router = useRouter();
+    const toast = useToast();
+
+    // Message left by the API client when a session expired or was revoked
+    useEffect(() => {
+        const flash = sessionStorage.getItem("flash_message");
+        if (flash) {
+            sessionStorage.removeItem("flash_message");
+            toast.warning(flash, "Signed out");
+        }
+    }, [toast]);
 
     useEffect(() => {
         if (isAuthenticated && user) {

@@ -25,7 +25,11 @@ api.interceptors.response.use(
         if (error.response?.status === 401 && !isAuthCall && typeof window !== "undefined") {
             sessionStorage.removeItem("token");
             sessionStorage.removeItem("user");
-            if (!window.location.pathname.startsWith("/login")) window.location.href = "/login";
+            if (!window.location.pathname.startsWith("/login")) {
+                // Shown as a toast by the login page after the redirect
+                sessionStorage.setItem("flash_message", "Your session expired or was signed out. Please sign in again.");
+                window.location.href = "/login";
+            }
         }
         return Promise.reject(error);
     }

@@ -8,6 +8,7 @@ import Link from "next/link";
 import { ArrowLeft, Box, Loader2, ExternalLink, Pencil, Check, X, Users, UserPlus, UserMinus, FileText, Plus, Link2 } from "lucide-react";
 import { api, apiError, statusClass, UserSummary } from "@/lib/api";
 import { inputClass } from "@/components/ui/Modal";
+import { useToast } from "@/components/ui/Toast";
 
 interface CaseDetail {
   id: string;
@@ -36,6 +37,7 @@ const STATUSES = ["open", "active", "suspended", "closed"];
 export default function CaseDetailPage() {
   const { token, user, can, canAny } = useAuth();
   const { activeBox } = useCrimeBox();
+  const toast = useToast();
   const params = useParams();
   const userId = params.userId as string;
   const caseId = params.caseId as string;
@@ -92,7 +94,8 @@ export default function CaseDetailPage() {
       await api.put(`/api/v1/cases/${caseId}`, { title: editTitle, description: editDesc, status: editStatus });
       setEditing(false);
       await load();
-    } catch (e) { alert(apiError(e, "Failed to update case")); }
+      toast.success("Case updated.");
+    } catch (e) { toast.error(apiError(e, "Failed to update case")); }
     finally { setSaving(false); }
   };
 
@@ -102,17 +105,25 @@ export default function CaseDetailPage() {
       await api.post(`/api/v1/cases/${caseId}/officers`, { userId: officer.id });
       setOfficerSearch("");
       await load();
-    } catch (e) { alert(apiError(e, "Failed to add officer")); }
+      toast.success(`${officer.fullName} added to the case and notified.`);
+    } catch (e) { toast.error(apiError(e, "Failed to add officer")); }
     finally { setOfficerBusy(null); }
   };
 
   const removeOfficer = async (officerId: string, name: string) => {
-    if (!confirm(`Remove ${name} from this case?`)) return;
+    const ok = await toast.confirm({
+      title: `Remove ${name}?`,
+      message: "They will lose access to this case's evidence unless they collected or hold it.",
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
     setOfficerBusy(officerId);
     try {
       await api.delete(`/api/v1/cases/${caseId}/officers/${officerId}`);
       await load();
-    } catch (e) { alert(apiError(e, "Failed to remove officer")); }
+      toast.success(`${name} removed from the case.`);
+    } catch (e) { toast.error(apiError(e, "Failed to remove officer")); }
     finally { setOfficerBusy(null); }
   };
 
@@ -122,7 +133,8 @@ export default function CaseDetailPage() {
     try {
       await api.post(`/api/v1/cases/${caseId}/boxes`, { boxId: activeBox.id });
       await load();
-    } catch (e) { alert(apiError(e, "Failed to link Crime Box")); }
+      toast.success(`Crime Box "${activeBox.name}" linked to this case.`);
+    } catch (e) { toast.error(apiError(e, "Failed to link Crime Box")); }
     finally { setLinking(false); }
   };
 

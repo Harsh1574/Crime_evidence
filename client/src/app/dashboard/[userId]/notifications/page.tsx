@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { api } from "@/lib/api";
+import { api, apiError } from "@/lib/api";
+import { useToast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthContext";
 import { Bell, CheckCheck, Loader2, Info, AlertTriangle, ShieldCheck, ArrowRightLeft, XCircle, Trash2, Users } from "lucide-react";
 import Link from "next/link";
@@ -41,6 +42,7 @@ function timeAgo(date: string) {
 
 export default function NotificationsPage() {
   const { token } = useAuth();
+  const toast = useToast();
   const params = useParams();
   const userId = params.userId as string;
 
@@ -65,7 +67,8 @@ export default function NotificationsPage() {
     try {
       await api.put("/api/v1/notifications/read-all");
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    } catch (e) { console.error(e); }
+      toast.success("All notifications marked as read.");
+    } catch (e) { toast.error(apiError(e, "Failed to mark notifications as read")); }
     finally { setMarking(false); }
   };
 

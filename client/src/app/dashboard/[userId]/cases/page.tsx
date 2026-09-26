@@ -7,6 +7,7 @@ import Link from "next/link";
 import { FolderOpen, Plus, ChevronRight, Loader2 } from "lucide-react";
 import LottieLoader from "@/components/ui/LottieLoader";
 import { api, apiError } from "@/lib/api";
+import { useToast } from "@/components/ui/Toast";
 
 interface Case {
   id: string;
@@ -30,6 +31,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function CasesPage() {
   const { token, canAny } = useAuth();
+  const toast = useToast();
   const params = useParams();
   const searchParams = useSearchParams();
   const userId = params.userId as string;
@@ -61,8 +63,8 @@ export default function CasesPage() {
       setShowNew(false);
       setNewTitle("");
       setNewDesc("");
-      alert(`Case created: ${r.data.caseNumber}`);
-    } catch (e) { alert(apiError(e, "Failed to create case")); }
+      toast.success(`Case number ${r.data.caseNumber} assigned.`, "Case created");
+    } catch (e) { toast.error(apiError(e, "Failed to create case")); }
     finally { setCreating(false); }
   };
 

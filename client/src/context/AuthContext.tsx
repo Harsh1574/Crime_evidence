@@ -4,6 +4,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import axios from "axios";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/Toast";
 
 interface User {
     id: string;
@@ -36,6 +37,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [token, setToken] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const router = useRouter();
+    const toast = useToast();
 
     const storeUser = (u: User) => {
         setUser(u);
@@ -87,6 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         sessionStorage.removeItem("active_crime_box_perm");
         sessionStorage.removeItem("active_crime_box_keys");
         delete axios.defaults.headers.common["Authorization"];
+        toast.success("Your session token has been revoked on the server.", "Signed out");
         router.push("/login");
     };
 

@@ -10,6 +10,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api, apiError, ALL_STATUSES, statusClass } from "@/lib/api";
 import { Modal, inputClass, textareaClass, primaryBtn, secondaryBtn } from "@/components/ui/Modal";
+import { useToast } from "@/components/ui/Toast";
 
 interface Evidence {
     id: string;
@@ -33,6 +34,7 @@ const BULK_EXAMPLE = `[
 export default function EvidenceListPage() {
     const { permission, activeBox } = useCrimeBox();
     const { can } = useAuth();
+    const toast = useToast();
     const router = useRouter();
     const searchParams = useSearchParams();
     const params = useParams();
@@ -107,15 +109,22 @@ export default function EvidenceListPage() {
 
     const bulkDelete = async () => {
         if (selected.size === 0) return;
-        if (!confirm(`Delete ${selected.size} evidence item(s)? The ledger keeps their history, but the records are removed.`)) return;
+        const ok = await toast.confirm({
+            title: `Delete ${selected.size} evidence item(s)?`,
+            message: "The ledger keeps their history, but the records and files are removed from the system.",
+            confirmLabel: "Delete",
+            danger: true,
+        });
+        if (!ok) return;
         setDeleting(true);
         try {
             const r = await api.delete("/api/evidence/bulk", { data: { evidenceIds: [...selected] } });
-            alert(`Deleted ${r.data.successful}, failed ${r.data.failed}.`);
+            if (r.data.failed > 0) toast.warning(`Deleted ${r.data.successful}, failed ${r.data.failed}.`);
+            else toast.success(`Deleted ${r.data.successful} item(s).`);
             setSelected(new Set());
             setReloadKey((k) => k + 1);
         } catch (e) {
-            alert(apiError(e, "Bulk delete failed"));
+            toast.error(apiError(e, "Bulk delete failed"));
         } finally {
             setDeleting(false);
         }
@@ -129,7 +138,7 @@ export default function EvidenceListPage() {
             const r = await api.get(`/api/v1/evidence/${encodeURIComponent(ref)}`);
             router.push(`/dashboard/${userId}/evidence/${r.data.evidence.id}`);
         } catch (e) {
-            alert(apiError(e, "No evidence found for that ID, evidence number or CID."));
+            toast.error(apiError(e, "No evidence found for that ID, evidence number or CID."));
         } finally {
             setLookingUp(false);
         }
@@ -140,19 +149,21 @@ export default function EvidenceListPage() {
         try {
             list = JSON.parse(bulkText);
         } catch {
-            alert("The bulk list must be valid JSON (an array of evidence objects).");
+            toast.error("The bulk list must be valid JSON (an array of evidence objects).");
             return;
         }
-        if (!Array.isArray(list)) { alert("The bulk list must be a JSON array."); return; }
+        if (!Array.isArray(list)) { toast.error("The bulk list must be a JSON array."); return; }
         setBulkBusy(true);
         try {
             const r = await api.post("/api/evidence/bulk", { evidenceList: list });
             setBulkResult(r.data);
+            if (r.data.failed > 0) toast.warning(`Imported ${r.data.successful}, failed ${r.data.failed}. See details below.`);
+            else toast.success(`Imported ${r.data.successful} item(s).`);
             setReloadKey((k) => k + 1);
         } catch (e: unknown) {
             const data = (e as { response?: { data?: typeof bulkResult } }).response?.data;
             if (data?.results) setBulkResult(data);
-            else alert(apiError(e, "Bulk import failed"));
+            else toast.error(apiError(e, "Bulk import failed"));
         } finally {
             setBulkBusy(false);
         }

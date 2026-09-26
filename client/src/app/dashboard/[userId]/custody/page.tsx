@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api, apiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/components/ui/Toast";
 import Link from "next/link";
 import {
     ArrowRightLeft,
@@ -24,6 +25,7 @@ export default function CustodyDashboardPage() {
     const params = useParams();
     const userId = params.userId as string;
     const { user, can } = useAuth();
+    const toast = useToast();
 
     const fetchTransfers = async () => {
         try {
@@ -42,7 +44,12 @@ export default function CustodyDashboardPage() {
     }, []);
 
     const handleApprove = async (transferId: string) => {
-        if (!confirm("Confirm receipt of this evidence? This will digitally sign the transfer and make you the custodian.")) return;
+        const ok = await toast.confirm({
+            title: "Accept custody?",
+            message: "This digitally signs the transfer and makes you the custodian of this evidence.",
+            confirmLabel: "Accept & sign",
+        });
+        if (!ok) return;
         setActionLoading(transferId);
         try {
             // Receipt signature: SHA-256 of who accepted what and when (the server chains it to the custody history)
@@ -51,25 +58,34 @@ export default function CustodyDashboardPage() {
             const signature = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
             await api.post(`/api/v1/custody/transfer/${transferId}/approve`, { signature });
             await fetchTransfers(); // Refresh list
-            alert("Transfer accepted. You are now the custodian.");
+            toast.success("You are now the custodian. The transfer was signed and anchored.", "Transfer accepted");
         } catch (error: unknown) {
-            alert(apiError(error, "Failed to accept transfer."));
+            toast.error(apiError(error, "Failed to accept transfer."));
         } finally {
             setActionLoading(null);
         }
     };
 
     const handleReject = async (transferId: string) => {
-        const reason = prompt("Enter a note explaining the rejection:");
+        const reason = await toast.prompt({
+            title: "Reject transfer",
+            message: "Custody stays with the sender. They will see your note.",
+            inputLabel: "Reason for rejection",
+            placeholder: "e.g. Wrong item sent",
+            required: true,
+            multiline: true,
+            confirmLabel: "Reject transfer",
+            danger: true,
+        });
         if (!reason) return;
 
         setActionLoading(transferId);
         try {
             await api.post(`/api/v1/custody/transfer/${transferId}/reject`, { reason });
             await fetchTransfers();
-            alert("Transfer rejected. Custody stays with the sender.");
+            toast.info("Custody stays with the sender.", "Transfer rejected");
         } catch (error: unknown) {
-            alert(apiError(error, "Failed to reject transfer."));
+            toast.error(apiError(error, "Failed to reject transfer."));
         } finally {
             setActionLoading(null);
         }
